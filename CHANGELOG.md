@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.5.0](https://github.com/vanducng/oh-my-dsh/compare/v0.4.0...v0.5.0) (2026-08-17)
+
+
+### Features
+
+* publish under [@vanducng](https://github.com/vanducng) and mount dsh-llm-pi-ai ([174184f](https://github.com/vanducng/oh-my-dsh/commit/174184fb1e836d1b9341d2353edb4e3cf3ab71c6))
+
 ## [Unreleased]
 
 ### Added
