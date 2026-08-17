@@ -9,8 +9,18 @@ function commandParts(command: string): string[] {
   return command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/gu)?.map(part => part.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2')) ?? []
 }
 
-export function editExternally(text: string, editor = process.env.VISUAL ?? process.env.EDITOR): string {
-  if (editor === undefined || editor.trim() === '') throw new Error('Set $VISUAL or $EDITOR to use the external editor.')
+/** Resolve `$VISUAL`, `$EDITOR`, or a platform default (trimmed), else undefined. */
+export function getEditorCommand(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | undefined {
+  const configured = env.VISUAL?.trim() || env.EDITOR?.trim()
+  if (configured !== undefined && configured !== '') return configured
+  if (platform === 'win32') return 'notepad'
+  return undefined
+}
+
+export function editExternally(text: string, editor: string | undefined = getEditorCommand()): string {
+  if (editor === undefined || editor.trim() === '') {
+    throw new Error('Set $VISUAL or $EDITOR to use the external editor.')
+  }
   const parts = commandParts(editor)
   const command = parts.shift()
   if (command === undefined) throw new Error('The configured editor command is empty.')

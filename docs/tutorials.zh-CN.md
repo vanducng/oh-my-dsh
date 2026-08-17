@@ -66,7 +66,7 @@ Agent 工作时，`Deep Driving` 表示当前回合仍在运行。Tool Card 会�
 
 ### 编写结构化 Prompt
 
-使用 `Shift+Enter`、`Alt+Enter` 或 `Ctrl+J` 插入换行。对于更长的任务，按 `Ctrl+X` 可以在 `$VISUAL` 或 `$EDITOR` 中编辑当前草稿，退出编辑器后内容会返回 Composer。
+使用 `Shift+Enter`、`Alt+Enter` 或 `Ctrl+J` 插入换行。对于更长的任务，按 `Ctrl+G` 可以在 `$VISUAL` 或 `$EDITOR` 中编辑当前草稿，退出编辑器后内容会返回 Composer。
 
 ```text
 目标：移除重复的加载状态行。

@@ -22,25 +22,27 @@ describe('formatHotkeysText', () => {
     expect(text).toContain('PgUp')
     expect(text).toContain('Ctrl+O')
     expect(text).toContain('Mouse wheel')
+    expect(text).toContain('Ctrl+G')
+    expect(text).toContain('Edit the prompt in $VISUAL or $EDITOR')
     expect(text).not.toContain('thinking')
     expect(text).not.toContain('Speech-to-text')
   })
 
   it('uses effective configurable bindings', () => {
-    const text = formatHotkeysText({ ...DEFAULT_KEYBINDINGS, 'ctrl+g': 'retry' })
-    expect(text).toContain('Alt+R / Ctrl+G')
+    const text = formatHotkeysText({ ...DEFAULT_KEYBINDINGS, 'ctrl+e': 'retry' })
+    expect(text).toContain('Alt+R / Ctrl+E')
   })
 
   it('keeps the default help subset compact and honors the paste binding', () => {
-    const text = formatEssentialHotkeysText({ ...DEFAULT_KEYBINDINGS, 'ctrl+g': 'paste-clipboard' })
+    const text = formatEssentialHotkeysText({ ...DEFAULT_KEYBINDINGS, 'ctrl+e': 'paste-clipboard' })
     expect(text.split('\n')).toHaveLength(8)
-    expect(text).toContain('Ctrl+V / Ctrl+G')
+    expect(text).toContain('Ctrl+V / Ctrl+E')
     expect(text).toContain('Esc twice')
     expect(text).not.toContain('Ctrl+A')
   })
 
   it('counts catalog rows after configurable bindings are merged by action', () => {
     expect(hotkeyCount()).toBeGreaterThan(0)
-    expect(hotkeyCount({ ...DEFAULT_KEYBINDINGS, 'ctrl+g': 'retry' })).toBe(hotkeyCount())
+    expect(hotkeyCount({ ...DEFAULT_KEYBINDINGS, 'ctrl+e': 'retry' })).toBe(hotkeyCount())
   })
 })
