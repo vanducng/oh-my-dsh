@@ -924,6 +924,77 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
+  it('keeps the @ popup open while the async search is pending instead of bouncing the composer', async () => {
+    const pending = new Map<string, (entries: readonly ProjectPathEntry[]) => void>()
+    const searchFiles: PathSearcher = async (_root, query) => new Promise((resolve) => {
+      pending.set(query, resolve)
+    })
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      cwd: '/proj',
+      projectRoot: '/proj',
+      home: '/home/me',
+      listDir: (dir) => dir === '/proj'
+        ? [
+          { name: 'src', directory: true },
+          { name: 'README.md', directory: false },
+        ]
+        : undefined,
+      autocompleteDebounceMs: 0,
+      searchFiles,
+    })
+    const screen = (): string => emulatedScreenRows(term.captured).join('\n')
+
+    press(term, '@')
+    expect(screen()).toContain('src/')
+
+    // The next keystroke starts an async fuzzy search; the listing popup must
+    // stay visible until that search settles (previously it was blanked
+    // synchronously, dropping the composer down and back up on every key).
+    press(term, 'a')
+    await new Promise(resolve => { setTimeout(resolve, 5) })
+    expect(screen()).toContain('src/')
+    expect(pending.has('a')).toBe(true)
+
+    // No fuzzy match and no listing fallback: the popup closes once, in place.
+    pending.get('a')?.([])
+    await new Promise(resolve => { setTimeout(resolve, 5) })
+    expect(screen()).not.toContain('src/')
+    tui.dispose()
+  })
+
+  it('does not apply a stale @ completion when Enter follows a pending query change', async () => {
+    const pending = new Map<string, (entries: readonly ProjectPathEntry[]) => void>()
+    const searchFiles: PathSearcher = async (_root, query) => new Promise((resolve) => {
+      pending.set(query, resolve)
+    })
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      cwd: '/proj',
+      projectRoot: '/proj',
+      home: '/home/me',
+      listDir: (dir) => dir === '/proj'
+        ? [{ name: 'src', directory: true }]
+        : undefined,
+      autocompleteDebounceMs: 0,
+      searchFiles,
+    })
+    const screen = (): string => emulatedScreenRows(term.captured).join('\n')
+
+    const submitted = tui.readline()
+    press(term, '@')
+    expect(screen()).toContain('src/')
+    press(term, 'x')
+    await new Promise(resolve => { setTimeout(resolve, 5) })
+    press(term, '\r')
+
+    // The popup held the stale `@` listing; Enter must submit the typed text
+    // instead of inserting the outdated `@src/ ` completion.
+    expect(await submitted).toBe('@x')
+    expect(screen()).not.toContain('@src/')
+    tui.dispose()
+  })
+
   it('opens bare-word path suggestions on Tab and completes on a second Tab', () => {
     const term = new FakeTerminal()
     const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {

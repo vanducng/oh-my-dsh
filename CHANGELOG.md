@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog], and this project adheres to [Semantic
 
 - Published the CLI and TUI under `@vanducng/oh-my-dsh` and `@vanducng/dsh-tui` instead of the upstream `@agi-fans` package names.
 
+### Fixed
+
+- Kept the `@`-file popup open while the asynchronous project search is in flight, so the composer no longer bounces up and down as the query changes; Enter and Tab reject a popup that is stale relative to the typed text.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added
