@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest'
 import { loadKeybindings } from './keybindings-config.ts'
 
 describe('loadKeybindings', () => {
+  it('ships the pi-style Ctrl+G binding for the external editor', () => {
+    const bindings = loadKeybindings(undefined)
+    expect(bindings['ctrl+g']).toBe('external-editor')
+    expect(bindings['ctrl+x']).toBeUndefined()
+  })
+
   it('merges valid user bindings and ignores unknown actions', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'omdsh-keys-')), 'keys.json')
     writeFileSync(path, JSON.stringify({ 'ctrl+e': 'external-editor', bad: 'launch-missiles' }))

@@ -66,7 +66,7 @@ On Linux, native image paste uses `wl-paste` under Wayland or `xclip` under X11.
 
 ### Write structured prompts
 
-Use `Shift+Enter`, `Alt+Enter`, or `Ctrl+J` for a newline. For a longer request, press `Ctrl+X` to edit the current draft in `$VISUAL` or `$EDITOR`, then return it to the composer.
+Use `Shift+Enter`, `Alt+Enter`, or `Ctrl+J` for a newline. For a longer request, press `Ctrl+G` to edit the current draft in `$VISUAL` or `$EDITOR`, then return it to the composer.
 
 ```text
 Goal: remove the duplicate loading row.

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 export type TuiAction = 'external-editor' | 'retry' | 'paste-clipboard' | 'copy-prompt' | 'copy-line'
 
 export const DEFAULT_KEYBINDINGS: Readonly<Record<string, TuiAction>> = Object.freeze({
-  'ctrl+x': 'external-editor',
+  'ctrl+g': 'external-editor',
   'alt+r': 'retry',
   'ctrl+v': 'paste-clipboard',
   'alt+c': 'copy-prompt',
