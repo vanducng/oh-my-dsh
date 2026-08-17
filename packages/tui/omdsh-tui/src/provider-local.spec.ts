@@ -6,6 +6,8 @@
  */
 import { PassThrough } from 'node:stream'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -572,7 +574,9 @@ describe('LocalTui (tty)', () => {
   it('prints the resume command below both fixed status lines', async () => {
     const term = new FakeTerminal()
     term.columns = 80
-    const tui = new LocalTui(term, 'deepseek-v4-flash', false)
+    const tui = new LocalTui(term, 'deepseek-v4-flash', false, 'dark', copyToClipboard, {
+      cwd: join(homedir(), 'Workspace/dsh-tui'),
+    })
     tui.setSession({ id: 'session-exit-layout', recent: [] })
     const pending = tui.readline()
 
