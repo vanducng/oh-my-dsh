@@ -18,17 +18,17 @@ Validate the behavior the change can affect without turning every edit into a re
 
 - **Markdown only:** run `pnpm check:md` and `git diff --check`. Read changed links and commands for correctness; formatting alone does not validate claims.
 - **Pure TUI formatting or state:** run the owning `*.spec.ts`, the owning package typecheck, and `git diff --check`. Include width tests for ANSI, CJK, emoji, combining marks, borders, padding, or truncation changes.
-- **Shared renderer, event mapping, editor, overlay, or status behavior:** run the complete `@agi-fans/dsh-tui` test suite and typecheck. Exercise both color and no-color behavior when presentation state otherwise depends on color.
+- **Shared renderer, event mapping, editor, overlay, or status behavior:** run the complete `@vanducng/dsh-tui` test suite and typecheck. Exercise both color and no-color behavior when presentation state otherwise depends on color.
 - **Raw mode, paste, keys, cursor, scrolling, viewport, signals, startup, or exit:** add `pnpm smoke` to focused tests. Verify terminal restoration after success, interruption, and error paths.
 - **Session lifecycle, durable replay, queueing, compaction, tools, skills, MCP, or commands:** run the owning runtime and command tests plus `pnpm smoke:happy`. Include replay or resume coverage when durable events or projections change.
-- **Package manifests, exports, dependencies, Cordis configuration, build scripts, or bins:** run `pnpm install`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm smoke:happy`, and the dependency-boundary audits in `AGENTS.md`.
+- **Package manifests, exports, dependencies, Cordis configuration, build scripts, or bins:** run `pnpm install`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm smoke:happy`, `pnpm test:package`, and the dependency-boundary audits in `AGENTS.md`.
 - **Release preparation:** defer to [`publish-oh-my-dsh`](../publish-oh-my-dsh/SKILL.md), which owns package packing and release-state verification.
 - **Cross-cutting or uncertain impact:** run the full verification set required by `AGENTS.md`.
 
 Prefer an exact Vitest file when the behavior is local:
 
 ```sh
-pnpm --filter @agi-fans/dsh-tui exec vitest run src/<owner>.spec.ts
+pnpm --filter @vanducng/dsh-tui exec vitest run src/<owner>.spec.ts
 ```
 
 Do not use `--passWithNoTests`, lower thresholds, or replace a real-entry smoke with a hand-mounted plugin test.
