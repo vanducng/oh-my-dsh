@@ -15,12 +15,12 @@ oh-my-dsh 是一个通过组合已发布 DeepSeek Harness 软件包构建的终�
 ## 软件包布局
 
 ```text
-apps/omdsh/                         @agi-fans/oh-my-dsh
+apps/omdsh/                         @vanducng/oh-my-dsh
 ├── src/bin.ts                      CLI 入口与参数处理
 ├── src/boot.ts                     启动 Harness 插件树
 └── config/cordis.yml               应用组合
 
-packages/tui/omdsh-tui/            @agi-fans/dsh-tui
+packages/tui/omdsh-tui/            @vanducng/dsh-tui
 ├── src/definition.ts               与 Provider 无关的 TUI Service
 ├── src/provider-local.ts           终端 Provider 与 TTY 所有者
 ├── src/session-runtime.ts          活跃 Agent 与会话生命周期
@@ -53,7 +53,7 @@ TUI 软件包从同一个 npm 软件包公开多个 Cordis 入口，因为它们
 [`apps/omdsh/config/cordis.yml`](../apps/omdsh/config/cordis.yml) 是应用 Profile 的权威来源，其中组合了：
 
 - Cordis Loader 与 Timer 基础设施；
-- DeepSeek LLM Adapter、设置、凭据、默认模型和 Agent Runtime；
+- DeepSeek LLM Adapter、默认休眠的 pi-ai 多 Provider Adapter、设置、凭据、默认模型和 Agent Runtime；
 - 持久化 JSONL 会话、Checkpoint、查询、标题、统计与 Token Projection；
 - 本地附件、文件系统、子进程、Bash、Sandbox 和权限 Provider；
 - Harness 命令、Compaction、Todo、Goal、Plan、审批、提问和 Subagent；

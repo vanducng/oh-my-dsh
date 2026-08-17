@@ -11,12 +11,12 @@ These task-based walkthroughs cover the path from a fresh installation to reliab
 Install the command globally, change into the project you want the agent to understand, and start omdsh there:
 
 ```sh
-npm install --global @agi-fans/oh-my-dsh
+npm install --global @vanducng/oh-my-dsh
 cd /path/to/your/project
 omdsh
 ```
 
-Use `npx @agi-fans/oh-my-dsh` instead when you want to try the current package without a global installation. The startup directory becomes the session workspace, while the status line resolves the surrounding Git repository when one is available.
+Use `npx @vanducng/oh-my-dsh` instead when you want to try the current package without a global installation. The startup directory becomes the session workspace, while the status line resolves the surrounding Git repository when one is available.
 
 ### Sign in securely
 
@@ -137,7 +137,7 @@ Run `/export` to write the complete transcript as `omdsh-transcript-<session-id>
 
 ### Select model and reasoning effort
 
-Run `/model` to open the model selector. omdsh first resolves the DeepSeek provider, then lets you choose an available model and, when supported, its reasoning effort. The active choice appears on the first status line and is stored in the durable session state.
+Run `/model` to open the model selector. omdsh lists every registered provider, including DeepSeek and any catalog or custom routes from `$DSH_HOME/settings.yaml`, then lets you choose an available model and, when supported, its reasoning effort. The active choice appears on the first status line and is stored in the durable session state.
 
 ### Customize the interface
 
@@ -163,6 +163,6 @@ Follow [Skills and MCP](skills-and-mcp.md) for complete search priority, `SKILL.
 | Inspect available tools | `/tools` |
 | Repeat work after each completed turn | `/loop [count\|duration] [prompt]` |
 | Read release notes | `/changelog` |
-| Install the latest release | `npm install --global @agi-fans/oh-my-dsh@latest` |
+| Install the latest release | `npm install --global @vanducng/oh-my-dsh@latest` |
 
 The daily update check only reports a newer npm version; it never installs one automatically.

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog], and this project adheres to [Semantic
 
 ## [Unreleased]
 
+### Added
+
+- Mounted the official Harness `dsh-llm-pi-ai` adapter so catalog and custom providers from `$DSH_HOME/settings.yaml` appear in `/model` and `--provider`.
+
+### Changed
+
+- Published the CLI and TUI under `@vanducng/oh-my-dsh` and `@vanducng/dsh-tui` instead of the upstream `@agi-fans` package names.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added
@@ -103,11 +111,11 @@ The format is based on [Keep a Changelog], and this project adheres to [Semantic
 - Preserved terminal-cell alignment and right padding for long commands, CJK text, emoji, ANSI styling, and narrow viewports.
 - Stabilized incremental rendering, transcript scrolling, cursor placement, tool-output folding, and queued input during active turns.
 
-[Unreleased]: https://github.com/agi-fans/oh-my-dsh/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/agi-fans/oh-my-dsh/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/agi-fans/oh-my-dsh/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/agi-fans/oh-my-dsh/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/agi-fans/oh-my-dsh/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/agi-fans/oh-my-dsh/releases/tag/v0.1.0
+[Unreleased]: https://github.com/vanducng/oh-my-dsh/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/vanducng/oh-my-dsh/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/vanducng/oh-my-dsh/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/vanducng/oh-my-dsh/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/vanducng/oh-my-dsh/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/vanducng/oh-my-dsh/releases/tag/v0.1.0
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

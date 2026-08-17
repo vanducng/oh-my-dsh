@@ -6,7 +6,7 @@
 
 一个专注、键盘优先的 DeepSeek Coding Agent，构建于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件架构之上，并受到 [oh-my-pi](https://github.com/can1357/oh-my-pi) 出色交互体验的启发。
 
-[![npm version](https://img.shields.io/npm/v/%40agi-fans%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@agi-fans/oh-my-dsh) [![npm downloads](https://img.shields.io/npm/dm/%40agi-fans%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@agi-fans/oh-my-dsh) [![Node.js ^22.19 or >=24](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933?style=flat-square&logo=node.js)](https://nodejs.org/) [![MIT License](https://img.shields.io/npm/l/%40agi-fans%2Foh-my-dsh?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/%40vanducng%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@vanducng/oh-my-dsh) [![npm downloads](https://img.shields.io/npm/dm/%40vanducng%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@vanducng/oh-my-dsh) [![Node.js ^22.19 or >=24](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933?style=flat-square&logo=node.js)](https://nodejs.org/) [![MIT License](https://img.shields.io/npm/l/%40vanducng%2Foh-my-dsh?style=flat-square)](LICENSE)
 
 [English](README.md) · 简体中文
 
@@ -19,11 +19,11 @@
 运行环境需要 Node.js 22.19 或更高的 22.x 版本，或者 Node.js 24 及更高版本；进行真实模型对话时还需要 DeepSeek API Key。
 
 ```sh
-npm install --global @agi-fans/oh-my-dsh
+npm install --global @vanducng/oh-my-dsh
 omdsh
 ```
 
-进入 omdsh 后运行一次 `/login`，验证并保存 DeepSeek API Key，即可开始对话。如果不想全局安装，可以运行 `npx @agi-fans/oh-my-dsh` 临时体验。
+进入 omdsh 后运行一次 `/login`，验证并保存 DeepSeek API Key，即可开始对话。如果不想全局安装，可以运行 `npx @vanducng/oh-my-dsh` 临时体验。
 
 ## 功能亮点
 
@@ -62,10 +62,10 @@ TUI 始终只是表现层与交互层。会话、工具、权限、模型、Skil
 DeepSeek Harness 插件与服务
              │
              ▼
- @agi-fans/dsh-tui — 终端能力边界
+ @vanducng/dsh-tui — 终端能力边界
              │
              ▼
- @agi-fans/oh-my-dsh — 启动与插件组合
+ @vanducng/oh-my-dsh — 启动与插件组合
 ```
 
 TUI 软件包拆分为 Service Definition、本地终端 Provider、会话与交互适配器、工具展示适配桥、命令贡献插件和交互式 Runner。这让终端所有权与 Harness 领域状态相互隔离，也只在能力拥有独立生命周期或所有者时公开插件边界。当前边界与数据流请参阅[架构概览](docs/architecture.zh-CN.md)。
@@ -80,7 +80,7 @@ TUI 软件包拆分为 Service Definition、本地终端 Provider、会话与交
 
 运行 `/login` 可以打开 DeepSeek API Key 管理页，通过遮罩输入框接收和验证 Key，再将其保存到 Harness 凭据存储中。用户主动选择的 Key 会从后续模型请求开始优先于继承的 `DEEPSEEK_API_KEY`，重启后仍然有效。`/logout` 会删除这份由 omdsh 管理的配置，并在环境变量可用时回退到环境变量。
 
-模型配置也可以来自 `$DSH_HOME/settings.yaml`。Skills 与 MCP 的配置方式请参阅 [Skills 与 MCP](docs/skills-and-mcp.zh-CN.md)。
+模型配置也可以来自 `$DSH_HOME/settings.yaml`。目录 Provider 和自定义 Provider 写在该文档的 `llm-pi-ai:` 段，通过 `apiKeyEnv` 引用凭据，不要把密钥写进文件。`/model` 和 `--provider` 会列出所有已注册路由，包括这些额外 Provider。Skills 与 MCP 的配置方式请参阅 [Skills 与 MCP](docs/skills-and-mcp.zh-CN.md)。
 
 升级后，omdsh 可以在启动时只展示一次版本说明。使用 `/changelog` 查看近期条目，或使用 `/changelog full` 查看随包发布的完整历史。程序每天至多执行一次带缓存的 npm 版本检查，只提示新版本而不会自动安装；这两项行为都可以在 `/settings` 中调整。
 
@@ -92,6 +92,7 @@ pnpm omdsh "list files"  # 从源码运行
 pnpm typecheck           # 检查 TypeScript
 pnpm test                # 单元测试与管道模式测试
 pnpm build               # 构建全部 workspace 软件包
+./scripts/install-local.sh  # 用当前检出替换 PATH 上的 npm 包
 pnpm smoke               # 交互式 PTY 冒烟测试
 pnpm smoke:happy         # 使用模拟 LLM 验证正常流程
 ```

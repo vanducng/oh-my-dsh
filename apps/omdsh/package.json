@@ -1,15 +1,15 @@
 {
-  "name": "@agi-fans/oh-my-dsh",
+  "name": "@vanducng/oh-my-dsh",
   "description": "omdsh: TUI coding agent command over the DeepSeek Harness runtime",
   "version": "0.4.0",
-  "homepage": "https://github.com/agi-fans/oh-my-dsh#readme",
+  "homepage": "https://github.com/vanducng/oh-my-dsh#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agi-fans/oh-my-dsh.git",
+    "url": "git+https://github.com/vanducng/oh-my-dsh.git",
     "directory": "apps/omdsh"
   },
   "bugs": {
-    "url": "https://github.com/agi-fans/oh-my-dsh/issues"
+    "url": "https://github.com/vanducng/oh-my-dsh/issues"
   },
   "type": "module",
   "bin": {
@@ -21,6 +21,7 @@
     "config"
   ],
   "license": "MIT",
+  "author": "Duc Nguyen <me@vanducng.dev>",
   "publishConfig": {
     "access": "public"
   },
@@ -52,6 +53,7 @@
     "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.1.0-rc.6",
     "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
     "@deepseek-ai/dsh-permission-presets": "0.1.0-rc.6",
     "@deepseek-ai/dsh-plan-mode": "0.1.0-rc.6",
@@ -75,7 +77,7 @@
     "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6",
     "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
     "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6",
-    "@agi-fans/dsh-tui": "workspace:^",
+    "@vanducng/dsh-tui": "workspace:^",
     "@deepseek-ai/dsh-subprocess-local": "0.1.0-rc.6",
     "@deepseek-ai/dsh-settings-file": "0.1.0-rc.6",
     "@deepseek-ai/dsh-credentials-local": "0.1.0-rc.6"

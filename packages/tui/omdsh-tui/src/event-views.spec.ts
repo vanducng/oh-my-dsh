@@ -412,7 +412,7 @@ describe('blockLines', () => {
   })
 
   it('keeps a long bash command in the body and the right frame cap visible', () => {
-    const command = 'pnpm --filter @agi-fans/dsh-tui test 2>&1 | grep -v WARN | tail -6 && pnpm --filter @agi-fans/dsh-tui build'
+    const command = 'pnpm --filter @vanducng/dsh-tui test 2>&1 | grep -v WARN | tail -6 && pnpm --filter @vanducng/dsh-tui build'
     const lines = blockLines({
       kind: 'tool',
       callId: CallId('call-long'),
@@ -426,8 +426,8 @@ describe('blockLines', () => {
 
     expect(top).toMatch(/^╭─── /u)
     expect(top).toMatch(/╮$/u)
-    expect(text).toContain('pnpm --filter @agi-fans/dsh-tui test')
-    expect(text).toContain('@agi-fans/dsh-tui build')
+    expect(text).toContain('pnpm --filter @vanducng/dsh-tui test')
+    expect(text).toContain('@vanducng/dsh-tui build')
     expect(visibleWidth(top)).toBe(80)
   })
 

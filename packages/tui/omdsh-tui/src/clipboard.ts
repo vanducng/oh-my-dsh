@@ -1,6 +1,6 @@
 /**
  * Best-effort system clipboard write for `/copy`.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import { spawn } from 'node:child_process'

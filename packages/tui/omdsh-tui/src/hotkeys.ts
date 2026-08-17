@@ -1,6 +1,6 @@
 /**
  * Keyboard-shortcut catalog embedded in `/help`.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import { DEFAULT_KEYBINDINGS, type TuiAction } from './keybindings-config.ts'

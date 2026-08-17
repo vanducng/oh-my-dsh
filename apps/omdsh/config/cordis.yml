@@ -47,7 +47,8 @@
 # User settings document ($DSH_HOME/settings.yaml) and credential sources
 # (inherited env, managed .credentials.yaml, project/user .env) — the same
 # rows the harness base mounts, so omdsh honors the user's existing model
-# route and API key setup out of the box.
+# route and API key setup out of the box. llm-pi-ai stays dormant until an
+# `llm-pi-ai:` settings section supplies catalog or custom provider routes.
 - id: settings
   name: '@deepseek-ai/dsh-settings-file'
   config:
@@ -57,6 +58,9 @@
   name: '@deepseek-ai/dsh-credentials-local'
   config:
     dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
+
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
 
 - id: agent
   name: '@deepseek-ai/dsh-agent'
@@ -206,42 +210,42 @@
     backgroundMode: continuable
 
 - id: tui
-  name: '@agi-fans/dsh-tui'
+  name: '@vanducng/dsh-tui'
   config:
     model: !!js process.env.OMDSH_MODEL || 'deepseek-v4-flash'
 
 - id: tui-tool-presentation
-  name: '@agi-fans/dsh-tui/tool-presentation'
+  name: '@vanducng/dsh-tui/tool-presentation'
 
 - id: tui-session-runtime
-  name: '@agi-fans/dsh-tui/session-runtime'
+  name: '@vanducng/dsh-tui/session-runtime'
 
 - id: tui-human-interaction
-  name: '@agi-fans/dsh-tui/human-interaction'
+  name: '@vanducng/dsh-tui/human-interaction'
 
 - id: tui-command-session
-  name: '@agi-fans/dsh-tui/command-session'
+  name: '@vanducng/dsh-tui/command-session'
 
 - id: tui-command-steer
-  name: '@agi-fans/dsh-tui/command-steer'
+  name: '@vanducng/dsh-tui/command-steer'
 
 - id: tui-command-loop
-  name: '@agi-fans/dsh-tui/command-loop'
+  name: '@vanducng/dsh-tui/command-loop'
 
 - id: tui-command-model
-  name: '@agi-fans/dsh-tui/command-model'
+  name: '@vanducng/dsh-tui/command-model'
 
 - id: tui-command-auth
-  name: '@agi-fans/dsh-tui/command-auth'
+  name: '@vanducng/dsh-tui/command-auth'
 
 - id: tui-command-export
-  name: '@agi-fans/dsh-tui/command-export'
+  name: '@vanducng/dsh-tui/command-export'
 
 - id: tui-command-integrations
-  name: '@agi-fans/dsh-tui/command-integrations'
+  name: '@vanducng/dsh-tui/command-integrations'
 
 - id: tui-startup-notices
-  name: '@agi-fans/dsh-tui/startup-notices'
+  name: '@vanducng/dsh-tui/startup-notices'
 
 - id: runner
-  name: '@agi-fans/dsh-tui/runner'
+  name: '@vanducng/dsh-tui/runner'

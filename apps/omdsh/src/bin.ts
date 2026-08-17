@@ -3,7 +3,7 @@
  * omdsh — command-line entry. Parses flags, applies model/provider
  * overrides to the environment the cordis.yml composition reads, and
  * boots the tree; the mounted runner owns process lifetime after that.
- * @module @agi-fans/oh-my-dsh
+ * @module @vanducng/oh-my-dsh
  */
 
 import { readFileSync } from 'node:fs'

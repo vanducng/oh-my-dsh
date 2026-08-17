@@ -1,6 +1,6 @@
 /**
  * Cordis plugin owning the active top-level omdsh Agent/session lifecycle.
- * @module @agi-fans/dsh-tui/session-runtime
+ * @module @vanducng/dsh-tui/session-runtime
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -6,7 +6,7 @@
 
 A focused, keyboard-first DeepSeek coding agent built on the plugin architecture of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and inspired by the interaction quality of [oh-my-pi](https://github.com/can1357/oh-my-pi).
 
-[![npm version](https://img.shields.io/npm/v/%40agi-fans%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@agi-fans/oh-my-dsh) [![npm downloads](https://img.shields.io/npm/dm/%40agi-fans%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@agi-fans/oh-my-dsh) [![Node.js ^22.19 or >=24](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933?style=flat-square&logo=node.js)](https://nodejs.org/) [![MIT License](https://img.shields.io/npm/l/%40agi-fans%2Foh-my-dsh?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/%40vanducng%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@vanducng/oh-my-dsh) [![npm downloads](https://img.shields.io/npm/dm/%40vanducng%2Foh-my-dsh?style=flat-square&logo=npm)](https://www.npmjs.com/package/@vanducng/oh-my-dsh) [![Node.js ^22.19 or >=24](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933?style=flat-square&logo=node.js)](https://nodejs.org/) [![MIT License](https://img.shields.io/npm/l/%40vanducng%2Foh-my-dsh?style=flat-square)](LICENSE)
 
 English · [简体中文](README.zh-CN.md)
 
@@ -19,11 +19,11 @@ English · [简体中文](README.zh-CN.md)
 Requirements: Node.js 22.19 or later in the 22.x line, or Node.js 24 or newer, plus a DeepSeek API key for live model turns.
 
 ```sh
-npm install --global @agi-fans/oh-my-dsh
+npm install --global @vanducng/oh-my-dsh
 omdsh
 ```
 
-Run `/login` once inside omdsh to validate and save your DeepSeek API key, then start a conversation. To try it without a global installation, run `npx @agi-fans/oh-my-dsh`.
+Run `/login` once inside omdsh to validate and save your DeepSeek API key, then start a conversation. To try it without a global installation, run `npx @vanducng/oh-my-dsh`.
 
 ## Highlights
 
@@ -62,10 +62,10 @@ Reference checkouts under `refs/` remain read-only research material. Runtime co
 DeepSeek Harness plugins and services
                 │
                 ▼
-  @agi-fans/dsh-tui — terminal capability seam
+  @vanducng/dsh-tui — terminal capability seam
                 │
                 ▼
-  @agi-fans/oh-my-dsh — boot and plugin composition
+  @vanducng/oh-my-dsh — boot and plugin composition
 ```
 
 The TUI package is split into a service definition, local terminal Provider, session and interaction adapters, tool-presentation bridge, command contributions, and interactive Runner. This isolates terminal ownership from Harness domain state and exposes plugin seams only where a capability has an independent lifecycle or owner. See the [architecture overview](docs/architecture.md) for the current boundaries and data flow.
@@ -80,7 +80,7 @@ See the reproducible [TUI performance report](docs/performance.md) or run `pnpm 
 
 Run `/login` to open the DeepSeek API Key dashboard, enter a key in a masked prompt, validate it, and save it through the Harness credential store. An interactively selected key takes priority over an inherited `DEEPSEEK_API_KEY` on subsequent requests and across restarts. `/logout` removes the omdsh-managed choice and falls back to the environment when available.
 
-Model settings can also come from `$DSH_HOME/settings.yaml`. Skills and MCP configuration are documented in [Skills and MCP](docs/skills-and-mcp.md).
+Model settings can also come from `$DSH_HOME/settings.yaml`. Catalog and custom providers live under the `llm-pi-ai:` section of that document, using `apiKeyEnv` references instead of inline secrets. `/model` and `--provider` list every registered route, including those extra providers. Skills and MCP configuration are documented in [Skills and MCP](docs/skills-and-mcp.md).
 
 After an upgrade, omdsh can show release notes once at startup. Use `/changelog` for recent entries or `/changelog full` for the complete packaged history. A cached daily npm check reports newer versions without installing anything automatically; both behaviors can be customized in `/settings`.
 
@@ -92,6 +92,7 @@ pnpm omdsh "list files"  # run from source
 pnpm typecheck           # check TypeScript
 pnpm test                # unit and pipe-mode tests
 pnpm build               # build all workspace packages
+./scripts/install-local.sh  # put this checkout on PATH instead of the npm package
 pnpm smoke               # interactive PTY smoke test
 pnpm smoke:happy         # mock-LLM happy path
 ```

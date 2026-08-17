@@ -4,13 +4,14 @@
   "description": "omdsh: a TUI coding agent on the DeepSeek Harness core runtime",
   "version": "0.4.0",
   "license": "MIT",
-  "homepage": "https://github.com/agi-fans/oh-my-dsh#readme",
+  "author": "Duc Nguyen <me@vanducng.dev>",
+  "homepage": "https://github.com/vanducng/oh-my-dsh#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agi-fans/oh-my-dsh.git"
+    "url": "git+https://github.com/vanducng/oh-my-dsh.git"
   },
   "bugs": {
-    "url": "https://github.com/agi-fans/oh-my-dsh/issues"
+    "url": "https://github.com/vanducng/oh-my-dsh/issues"
   },
   "type": "module",
   "engines": {
@@ -26,7 +27,8 @@
     "check:md": "node scripts/format-markdown.mjs --check",
     "omdsh": "pnpm --dir apps/omdsh omdsh",
     "smoke": "node scripts/pty-smoke.mjs",
-    "smoke:happy": "node scripts/happy-smoke.mjs"
+    "smoke:happy": "node scripts/happy-smoke.mjs",
+    "test:package": "pnpm build && node scripts/smoke-package.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",

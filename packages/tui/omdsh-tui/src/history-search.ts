@@ -1,7 +1,7 @@
 /**
  * Ctrl+R history search: OMP token-AND overlay over in-session prompts.
  * Pure — the provider owns the live session history and key routing.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import { renderEditor } from './box.ts'

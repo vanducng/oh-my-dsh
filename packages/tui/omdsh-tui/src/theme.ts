@@ -2,7 +2,7 @@
  * oh-my-pi dark theme, ported to Node (no Bun.color). Semantic colors, rounded
  * box chrome, and status glyphs — the visual vocabulary the rest of the view
  * paints with.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 /** Rounded-box drawing characters (OMP unicode preset). */

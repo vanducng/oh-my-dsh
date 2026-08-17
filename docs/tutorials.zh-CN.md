@@ -11,12 +11,12 @@
 全局安装命令，进入希望 Agent 理解的项目目录，再从这里启动 omdsh：
 
 ```sh
-npm install --global @agi-fans/oh-my-dsh
+npm install --global @vanducng/oh-my-dsh
 cd /path/to/your/project
 omdsh
 ```
 
-如果只想临时体验当前版本而不进行全局安装，可以使用 `npx @agi-fans/oh-my-dsh`。启动目录会成为会话工作区；如果外层存在 Git 仓库，状态栏会同时解析对应的项目上下文。
+如果只想临时体验当前版本而不进行全局安装，可以使用 `npx @vanducng/oh-my-dsh`。启动目录会成为会话工作区；如果外层存在 Git 仓库，状态栏会同时解析对应的项目上下文。
 
 ### 安全登录
 
@@ -137,7 +137,7 @@ Agent 处于 idle 时运行 `/compact`，可以使用摘要替换一段有价值
 
 ### 选择模型与推理强度
 
-运行 `/model` 打开模型选择器。omdsh 会先解析 DeepSeek Provider，再让你选择可用模型；模型支持时还可以继续选择 Reasoning Effort。当前选择会显示在第一行 Status Line 中，并写入持久化会话状态。
+运行 `/model` 打开模型选择器。omdsh 会列出所有已注册 Provider，包括 DeepSeek 以及 `$DSH_HOME/settings.yaml` 中的目录或自定义路由，再让你选择可用模型；模型支持时还可以继续选择 Reasoning Effort。当前选择会显示在第一行 Status Line 中，并写入持久化会话状态。
 
 ### 定制界面
 
@@ -163,6 +163,6 @@ Agent 处于 idle 时运行 `/compact`，可以使用摘要替换一段有价值
 | 查看可用工具 | `/tools` |
 | 每个回合完成后重复工作 | `/loop [次数\|时长] [Prompt]` |
 | 阅读版本说明 | `/changelog` |
-| 安装最新版本 | `npm install --global @agi-fans/oh-my-dsh@latest` |
+| 安装最新版本 | `npm install --global @vanducng/oh-my-dsh@latest` |
 
 每日更新检查只会提示存在新的 npm 版本，不会自动安装。

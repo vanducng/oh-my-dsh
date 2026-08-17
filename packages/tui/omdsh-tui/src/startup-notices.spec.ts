@@ -63,13 +63,13 @@ describe('startup notices plugin', () => {
       currentVersion: '0.3.0',
       changelogPath,
       dshHome: root,
-      packageName: '@agi-fans/oh-my-dsh',
+      packageName: '@vanducng/oh-my-dsh',
     })
 
     await ctx.omdshStartup.afterSessionStart()
 
     expect(notice).toHaveBeenCalledWith(
-      'Update available · 0.3.0 → 0.3.1\nnpm install --global @agi-fans/oh-my-dsh@latest',
+      'Update available · 0.3.0 → 0.3.1\nnpm install --global @vanducng/oh-my-dsh@latest',
     )
     await ctx.fiber.dispose()
   })

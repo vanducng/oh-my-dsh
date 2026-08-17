@@ -1,7 +1,7 @@
 /**
  * `/copy` picker overlay: OMP-style list of transcript copy targets.
  * Pure — the provider owns the clipboard write.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import type { CopyPick } from './copy-targets.ts'

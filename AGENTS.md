@@ -7,7 +7,7 @@ These instructions apply to the entire repository. More specific `AGENTS.md` fil
 - `omdsh` is a TUI coding agent built on the published DeepSeek Harness packages and inspired by the interaction quality of oh-my-pi.
 - Preserve the DeepSeek Harness “everything is a plugin” architecture. New capabilities should be Cordis plugins, services, providers, consumers, or app composition whenever that model fits.
 - Keep product-owned implementation inside `apps/`, `packages/`, `scripts/`, and `docs/`. Do not place omdsh implementation in a reference project.
-- `apps/omdsh` owns the `@agi-fans/oh-my-dsh` package, command startup, and runtime composition. `packages/tui/omdsh-tui` owns the `@agi-fans/dsh-tui` package, terminal presentation, input, session interaction, and reusable TUI behavior.
+- `apps/omdsh` owns the `@vanducng/oh-my-dsh` package, command startup, and runtime composition. `packages/tui/omdsh-tui` owns the `@vanducng/dsh-tui` package, terminal presentation, input, session interaction, and reusable TUI behavior.
 - Prefer deep, explicit package seams over copying upstream internals. If a second provider or consumer creates a real independent lifecycle, split the seam then rather than pre-emptively.
 
 ## Reference Repositories Are Read-Only
@@ -25,7 +25,7 @@ These instructions apply to the entire repository. More specific `AGENTS.md` fil
 - All `@deepseek-ai/dsh-*`, `@deepseek-ai/cordis*`, and other DeepSeek runtime packages must be consumed from npm through normal package exports.
 - Pin one coherent published DSH release across direct dependencies. Do not mix incompatible DSH release candidates merely because an npm `latest` tag points at an older line.
 - Use exact versions for DSH runtime packages so installs and the runtime composition are reproducible. Update `pnpm-lock.yaml` whenever dependency versions change.
-- The only expected `workspace:` dependencies are omdsh-owned packages such as `@agi-fans/dsh-tui`. A DeepSeek package using `workspace:` is a boundary violation.
+- The only expected `workspace:` dependencies are omdsh-owned packages such as `@vanducng/dsh-tui`. A DeepSeek package using `workspace:` is a boundary violation.
 - Import only files that are actually present in the published package. Prefer public package exports; an export-map entry that targets an omitted source file is not a usable API.
 - If a required upstream capability is not published, first look for a public library API or implement a local adapter. Do not silently fall back to `refs/`.
 - Keep `pnpm-workspace.yaml` scoped to omdsh-owned packages and apps. Treat any addition under `refs/` as an error.
@@ -57,12 +57,11 @@ These instructions apply to the entire repository. More specific `AGENTS.md` fil
 
 ## Changelog and Releases
 
-- Maintain `CHANGELOG.md` using Keep a Changelog, with Semantic Versioning for releases.
-- Add every user-visible feature, behavior change, bug fix, deprecation, removal, or security fix to `Unreleased` in the same change that introduces it. Do not add routine refactors, tests, formatting, or internal documentation unless they materially affect users or release operations.
-- Use only the standard headings that apply: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`. Keep entries concise, user-facing, and free of commit-message noise.
-- Do not create a dated version section before that version is actually released. When releasing, move the accumulated `Unreleased` entries into `## [X.Y.Z] - YYYY-MM-DD`, restore an empty `Unreleased` section, and update the comparison links at the bottom of the file.
-- Keep the versions of the root manifest, `@agi-fans/oh-my-dsh`, and `@agi-fans/dsh-tui` synchronized unless the repository explicitly adopts independent package versioning.
-- Choose version increments by public impact: after `1.0.0`, incompatible behavior or API changes require a major increment, backward-compatible functionality requires a minor increment, and backward-compatible fixes require a patch increment. During the initial `0.y.z` development series, use a minor increment for compatibility breaks and document them prominently; use a patch increment only for backward-compatible fixes.
+- Release Please is the release authority: it owns version bumps, `CHANGELOG.md` dated sections, Git tags, and GitHub Releases. Do not add a second tag, changelog, or publish path.
+- Describe user-visible work in Conventional Commits. Do not hand-edit dated version sections, comparison links, or `.release-please-manifest.json` except during an explicit recovery.
+- Keep the versions of the root manifest, `@vanducng/oh-my-dsh`, and `@vanducng/dsh-tui` synchronized. Publish the TUI package before the CLI package.
+- Choose version increments by public impact: after `1.0.0`, incompatible behavior or API changes require a major increment, backward-compatible functionality requires a minor increment, and backward-compatible fixes require a patch increment. During the initial `0.y.z` development series, use a minor increment for compatibility breaks and document them prominently; use a patch increment only for backward-compatible fixes. Release Please is configured with `bump-minor-pre-major`.
+- The first npm version of a new package name is published interactively. Later versions publish through the trusted OIDC workflow. Never invoke `npm publish` or `pnpm publish` from an agent session.
 
 ## Implementation Practices
 
@@ -84,6 +83,7 @@ pnpm test
 pnpm build
 pnpm check:md
 pnpm smoke:happy
+pnpm test:package
 git diff --check
 ```
 

@@ -1,6 +1,6 @@
 /**
  * Status-line customization shared by settings, persistence, and rendering.
- * @module @agi-fans/dsh-tui/status-config
+ * @module @vanducng/dsh-tui/status-config
  */
 
 /** Stable telemetry groups users can show, hide, and reorder. */

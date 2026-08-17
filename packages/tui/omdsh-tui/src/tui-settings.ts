@@ -1,6 +1,6 @@
 /**
  * Durable TUI appearance and status-line preferences on the user-settings seam.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import z from '@deepseek-ai/schemastery'

@@ -15,12 +15,12 @@ The product deliberately avoids a second agent core. It adapts Harness capabilit
 ## Package layout
 
 ```text
-apps/omdsh/                         @agi-fans/oh-my-dsh
+apps/omdsh/                         @vanducng/oh-my-dsh
 ├── src/bin.ts                      CLI entry and argument handling
 ├── src/boot.ts                     Harness tree boot
 └── config/cordis.yml               application composition
 
-packages/tui/omdsh-tui/            @agi-fans/dsh-tui
+packages/tui/omdsh-tui/            @vanducng/dsh-tui
 ├── src/definition.ts               provider-neutral TUI service
 ├── src/provider-local.ts           terminal provider and TTY owner
 ├── src/session-runtime.ts          active agent and session lifecycle
@@ -53,7 +53,7 @@ Pure algorithms remain internal modules: ANSI parsing, display-cell width, Markd
 [`apps/omdsh/config/cordis.yml`](../apps/omdsh/config/cordis.yml) is the authoritative application profile. It composes:
 
 - Cordis loader and timer infrastructure;
-- the DeepSeek LLM adapter, settings, credentials, default model, and Agent runtime;
+- the DeepSeek LLM adapter, the dormant pi-ai multi-provider adapter, settings, credentials, default model, and Agent runtime;
 - durable JSONL sessions, checkpointing, query, title, statistics, and token projections;
 - local attachment, filesystem, subprocess, bash, sandbox, and permission providers;
 - Harness commands, compaction, todo, goal, plan, approval, questions, and subagents;

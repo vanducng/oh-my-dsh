@@ -6,7 +6,7 @@
  * single reader. windowTranscript clips the body the way OMP's ScrollView
  * does. Both are pure so the whole rendering pipeline is testable without
  * a terminal.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import type {} from '@deepseek-ai/dsh-agent'

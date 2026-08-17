@@ -38,7 +38,7 @@ describe('renderFramedBlock', () => {
   })
 
   it('preserves balanced caps when a long command header is truncated', () => {
-    const command = 'pnpm --filter @agi-fans/dsh-tui test 2>&1 | grep -v WARN | tail -6 && pnpm --filter @agi-fans/dsh-tui build'
+    const command = 'pnpm --filter @vanducng/dsh-tui test 2>&1 | grep -v WARN | tail -6 && pnpm --filter @vanducng/dsh-tui build'
     for (const activeTheme of [theme, createTheme(true, true)]) {
       const top = stripAnsi(renderFramedBlock({
         header: '✔ bash',

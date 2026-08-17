@@ -1,6 +1,6 @@
 /**
  * `/tools` help body: names visible to the current agent.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 import { renderMarkdown } from './markdown.ts'

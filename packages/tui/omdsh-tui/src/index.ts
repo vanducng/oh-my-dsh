@@ -1,10 +1,10 @@
 /**
- * @agi-fans/dsh-tui — the omdsh TUI capability seam.
+ * @vanducng/dsh-tui — the omdsh TUI capability seam.
 
  * Package root is the local terminal provider plugin (apply/Config). Other
  * runtime capabilities live on explicit plugin subpaths; rendering internals
  * remain private implementation modules.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 
 export * from './definition.ts'

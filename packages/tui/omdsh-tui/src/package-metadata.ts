@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const APP_NAME = 'omdsh'
-export const PACKAGE_NAME = '@agi-fans/oh-my-dsh'
+export const PACKAGE_NAME = '@vanducng/oh-my-dsh'
 
 function readPackageVersion(): string {
   const manifest = JSON.parse(
