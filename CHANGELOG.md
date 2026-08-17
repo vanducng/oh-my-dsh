@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.5.1](https://github.com/vanducng/oh-my-dsh/compare/v0.5.0...v0.5.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **tui:** keep @-file popup stable while async search runs ([#2](https://github.com/vanducng/oh-my-dsh/issues/2)) ([df1df5a](https://github.com/vanducng/oh-my-dsh/commit/df1df5a7face07ba7bbc3fa26c1971558c41781e))
+
 ## [0.5.0](https://github.com/vanducng/oh-my-dsh/compare/v0.4.0...v0.5.0) (2026-08-17)
 
 
