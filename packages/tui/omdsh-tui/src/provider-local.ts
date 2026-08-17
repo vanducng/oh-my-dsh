@@ -188,7 +188,7 @@ export class LocalTui implements TuiService {
   #history: string[] = []
   #historyIndex = 0
   #draft = ''
-  #ac: { items: AutocompleteItem[]; selected: number } | null = null
+  #ac: { items: AutocompleteItem[]; selected: number; prefix: string } | null = null
   #search: HistorySearchState | null = null
   #settings: SettingsState | null = null
   #copySelector: CopySelectorState | null = null
@@ -1511,9 +1511,7 @@ export class LocalTui implements TuiService {
   #handleAutocomplete(event: KeyEvent): boolean {
     if (event.type !== 'key') return false
     if (event.id === 'tab') {
-      if (this.#ac !== null) {
-        this.#applySelectedCompletion()
-      } else {
+      if (this.#ac === null || !this.#applySelectedCompletion()) {
         this.#refreshAutocomplete(true)
       }
       this.#render()
@@ -1572,7 +1570,12 @@ export class LocalTui implements TuiService {
     const atPrefix = token?.kind === 'at' ? parsePathPrefix(token.prefix).raw.replaceAll('\\', '/') : ''
     const fuzzyAt = token?.kind === 'at' && atPrefix !== '' && !atPrefix.endsWith('/')
     if (fuzzyAt) {
-      this.#ac = null
+      // Keep the previous path popup visible while the async search is in
+      // flight (oh-my-pi behavior): blanking it on every keystroke makes the
+      // bottom-anchored composer bounce up and down until the result lands.
+      // A popup of a different category (slash command) cannot stay relevant
+      // for an `@` token and is cleared immediately.
+      if (this.#ac !== null && this.#ac.items[0]?.kind !== 'path') this.#ac = null
       const text = this.#editor.text
       const cursor = this.#editor.cursor
       this.#autocompleteTimer = setTimeout(() => {
@@ -1613,7 +1616,7 @@ export class LocalTui implements TuiService {
       const idx = result.items.findIndex((item) => item.value === prev)
       if (idx >= 0) selected = idx
     }
-    this.#ac = { items: result.items, selected }
+    this.#ac = { items: result.items, selected, prefix: result.prefix }
   }
 
   #moveAutocomplete(dir: -1 | 1): void {
@@ -1622,14 +1625,35 @@ export class LocalTui implements TuiService {
     this.#ac = { ...this.#ac, selected: (this.#ac.selected + dir + n) % n }
   }
 
-  #applySelectedCompletion(): void {
-    const item = this.#ac?.items[this.#ac.selected]
-    if (item === undefined) return
+  /**
+   * Whether the live buffer still matches the prefix the current popup was
+   * built for. The `@`-fuzzy popup may outlive the keystroke that triggered
+   * its refresh (it stays open while the async search is in flight), so
+   * accepting it would otherwise replace a newer token with a stale path —
+   * the oh-my-pi `#autocompletePrefixMatchesCursorText` guard. Slash popups
+   * rebuild synchronously per keystroke and are never stale in practice.
+   */
+  #autocompletePrefixMatches(prefix: string, item: AutocompleteItem): boolean {
+    const { text, cursor } = this.#editor
+    if (item.kind === 'path') {
+      const token = findPathToken(text, cursor, true)
+      if (token === null) return false
+      return text.slice(token.start, cursor) === prefix
+    }
+    return text.slice(0, cursor) === prefix
+  }
+
+  #applySelectedCompletion(): boolean {
+    const ac = this.#ac
+    const item = ac?.items[ac.selected]
+    if (ac === null || item === undefined) return false
+    if (!this.#autocompletePrefixMatches(ac.prefix, item)) return false
     const next = item.kind === 'path'
       ? applyPathCompletion(this.#editor.text, this.#editor.cursor, item)
       : applySlashCompletion(this.#editor.text, this.#editor.cursor, item)
     this.#editor.setText(next.text, next.cursor)
     this.#refreshAutocomplete()
+    return true
   }
 
   #applyCommand(command: EditorCommand): void {
