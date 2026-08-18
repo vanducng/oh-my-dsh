@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { mcpCatalogText } from './command-integrations.ts'
 import {
@@ -48,8 +48,8 @@ describe('sessionControls', () => {
 })
 
 describe('createSubmissionMessage', () => {
-  it('validates every draft image before saving and emits one mixed user message', async () => {
-    const calls: string[] = []
+  it('saves draft images in one batch and emits one mixed user message', async () => {
+    const batches: number[] = []
     const ref = {
       attachmentId: AttachmentId('attachment:test'),
       mediaType: 'image/png' as const,
@@ -59,8 +59,10 @@ describe('createSubmissionMessage', () => {
       name: 'clipboard.png',
     }
     const attachments = {
-      validateImage: async () => { calls.push('validate') },
-      saveImage: async () => { calls.push('save'); return ref },
+      saveImages: async (inputs: readonly { data: Uint8Array }[]) => {
+        batches.push(inputs.length)
+        return [ref]
+      },
     }
 
     const message = await createSubmissionMessage({
@@ -68,11 +70,22 @@ describe('createSubmissionMessage', () => {
       images: [{ data: PNG_1X1, mediaType: 'image/png', name: 'clipboard.png', width: 1, height: 1 }],
     }, attachments)
 
-    expect(calls).toEqual(['validate', 'save'])
+    expect(batches).toEqual([1])
     expect(message.content).toEqual([
       { type: 'text', text: '[Image #1, 1x1] describe this' },
       { type: 'image', attachment: ref },
     ])
+  })
+
+  it('rejects an admission error before emitting a user message', async () => {
+    await expect(createSubmissionMessage({
+      text: 'too many',
+      images: [{ data: PNG_1X1, mediaType: 'image/png', name: 'a.png', width: 1, height: 1 }],
+    }, {
+      saveImages: async () => {
+        throw new AttachmentError('Image batch exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
+      },
+    })).rejects.toMatchObject({ code: 'TOO_MANY_IMAGES' })
   })
 
   it('rehydrates a durable queued message into an editable mixed draft', async () => {
