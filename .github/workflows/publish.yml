@@ -187,8 +187,18 @@ jobs:
           mkdir -p release-artifacts
           pnpm --filter @vanducng/dsh-tui pack --pack-destination release-artifacts
           pnpm --filter @vanducng/oh-my-dsh pack --pack-destination release-artifacts
-          npm publish --dry-run --ignore-scripts ./release-artifacts/vanducng-dsh-tui-*.tgz
-          npm publish --dry-run --ignore-scripts ./release-artifacts/vanducng-oh-my-dsh-*.tgz
+          VERSION="$(node -p "require('./apps/omdsh/package.json').version")"
+          dry_run_if_new() {
+            local package="$1"
+            local tarball="$2"
+            if [ "$(npm view "${package}@${VERSION}" version 2>/dev/null)" = "${VERSION}" ]; then
+              echo "skip dry-run ${package}@${VERSION} already on npm"
+              return 0
+            fi
+            npm publish --dry-run --ignore-scripts "${tarball}"
+          }
+          dry_run_if_new @vanducng/dsh-tui ./release-artifacts/vanducng-dsh-tui-*.tgz
+          dry_run_if_new @vanducng/oh-my-dsh ./release-artifacts/vanducng-oh-my-dsh-*.tgz
 
       - name: Upload release artifact (v7.0.1)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
