@@ -10,6 +10,6 @@ describe('omdsh composition', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { dependencies?: Record<string, string> }
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-llm-pi-ai']).toBe('0.1.0-rc.6')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-llm-pi-ai']).toBe('0.1.0-rc.7')
   })
 })

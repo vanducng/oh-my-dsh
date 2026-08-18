@@ -17,7 +17,7 @@ import {
   type ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type LlmResolvedModelInfo, type UserMessage } from '@deepseek-ai/dsh-llm'
-import type { ImageAttachmentRef, SaveImageAttachment, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import { isImageAdmissionError, type ImageAttachmentRef, type SaveImageAttachment, type StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
 import type {} from '@deepseek-ai/dsh-commands'
@@ -331,15 +331,14 @@ function compactDescription(value: string, maxLength: number = 140): string {
 }
 
 interface SubmissionAttachmentStore {
-  validateImage(input: SaveImageAttachment): Promise<void>
-  saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>
+  saveImages(inputs: readonly SaveImageAttachment[]): Promise<readonly ImageAttachmentRef[]>
 }
 
 interface RestoreAttachmentStore {
   readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
 }
 
-/** Validate all drafts, persist them, then build one atomic mixed user message. */
+/** Persist draft images as one batch, then build one mixed user message. */
 export async function createSubmissionMessage(
   submission: TuiSubmission,
   attachments?: SubmissionAttachmentStore,
@@ -350,11 +349,9 @@ export async function createSubmissionMessage(
     ...(image.name === undefined ? {} : { name: image.name }),
   }))
   if (inputs.length > 0 && attachments === undefined) throw new Error('Attachment storage is not configured.')
-  const refs: ImageAttachmentRef[] = []
-  if (attachments !== undefined) {
-    for (const input of inputs) await attachments.validateImage(input)
-    for (const input of inputs) refs.push(await attachments.saveImage(input))
-  }
+  const refs = inputs.length === 0 || attachments === undefined
+    ? []
+    : [...await attachments.saveImages(inputs)]
   const content = [
     ...(submission.text === '' ? [] : [{ type: 'text' as const, text: submission.text }]),
     ...refs.map(attachment => ({ type: 'image' as const, attachment })),
@@ -457,7 +454,14 @@ export class SessionRuntime {
   async send(input: string | TuiSubmission, agent: Agent = this.#requiredAgent()): Promise<void> {
     this.assertActive(agent)
     const submission = typeof input === 'string' ? { text: input, images: [] } : input
-    const message = await createSubmissionMessage(submission, this.#ctx.get('attachments'))
+    let message
+    try {
+      message = await createSubmissionMessage(submission, this.#ctx.get('attachments'))
+    } catch (error: unknown) {
+      if (submission.images.length === 0 || isImageAdmissionError(error)) throw error
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`Unable to store the attached image. ${detail}`)
+    }
     this.assertActive(agent)
     agent.followup(message)
   }
