@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.5.2](https://github.com/vanducng/oh-my-dsh/compare/v0.5.1...v0.5.2) (2026-08-17)
+
+
+### Features
+
+* **tui:** bind open-in-editor to Ctrl+G like oh-my-pi ([#5](https://github.com/vanducng/oh-my-dsh/issues/5)) ([3a82560](https://github.com/vanducng/oh-my-dsh/commit/3a82560a18584d3a1622f894e5735fa8cc76676d)), closes [#4](https://github.com/vanducng/oh-my-dsh/issues/4)
+
 ## [0.5.1](https://github.com/vanducng/oh-my-dsh/compare/v0.5.0...v0.5.1) (2026-08-17)
 
 
