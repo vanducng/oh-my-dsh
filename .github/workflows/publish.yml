@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      republish_tag:
+        description: Existing release tag to publish any missing npm packages
+        required: false
+        type: string
 
 concurrency:
   group: release-${{ github.repository }}
@@ -18,12 +23,24 @@ jobs:
       issues: write
       pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
+      release_created: ${{ steps.republish.outputs.release_created || steps.release.outputs.release_created }}
+      tag_name: ${{ steps.republish.outputs.tag_name || steps.release.outputs.tag_name }}
+      version: ${{ steps.republish.outputs.version || steps.release.outputs.version }}
     steps:
+      - name: Republish existing tag
+        id: republish
+        if: github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''
+        env:
+          TAG: ${{ inputs.republish_tag }}
+        run: |
+          set -euo pipefail
+          echo "release_created=true" >> "${GITHUB_OUTPUT}"
+          echo "tag_name=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${TAG#v}" >> "${GITHUB_OUTPUT}"
+
       - name: Generate MiuMun app token
         id: app_token
+        if: steps.republish.outputs.release_created != 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           client-id: ${{ secrets.GH_APP_CLIENT_ID }}
@@ -31,6 +48,7 @@ jobs:
 
       - name: Open or update release PR
         id: release
+        if: steps.republish.outputs.release_created != 'true'
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7
         with:
           token: ${{ steps.app_token.outputs.token }}
@@ -39,7 +57,7 @@ jobs:
 
       - name: Resolve release PR
         id: release-pr
-        if: steps.release.outputs.prs_created == 'true'
+        if: steps.republish.outputs.release_created != 'true' && steps.release.outputs.prs_created == 'true'
         env:
           RELEASE_PR: ${{ steps.release.outputs.pr }}
         run: |
@@ -211,13 +229,28 @@ jobs:
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
           set -euo pipefail
-          npm publish --access public --ignore-scripts ./vanducng-dsh-tui-*.tgz
-          for _ in 1 2 3 4 5 6 7 8; do
-            if [ "$(npm view "@vanducng/dsh-tui@${VERSION}" version 2>/dev/null)" = "${VERSION}" ]; then
-              npm publish --access public --ignore-scripts ./vanducng-oh-my-dsh-*.tgz
+
+          published() {
+            [ "$(npm view "$1@${VERSION}" version 2>/dev/null)" = "${VERSION}" ]
+          }
+
+          publish_if_missing() {
+            local package="$1"
+            local tarball="$2"
+            if published "${package}"; then
+              echo "${package}@${VERSION} already on npm"
+              return 0
+            fi
+            npm publish --access public --ignore-scripts "${tarball}"
+          }
+
+          publish_if_missing @vanducng/dsh-tui ./vanducng-dsh-tui-*.tgz
+          for _ in $(seq 1 20); do
+            if published @vanducng/dsh-tui; then
+              publish_if_missing @vanducng/oh-my-dsh ./vanducng-oh-my-dsh-*.tgz
               exit 0
             fi
-            sleep 3
+            sleep 5
           done
           echo "Timed out waiting for @vanducng/dsh-tui@${VERSION}" >&2
           exit 1
