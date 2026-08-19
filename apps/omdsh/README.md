@@ -33,7 +33,7 @@ Model/provider routes come from `OMDSH_MODEL`/`OMDSH_PROVIDER` or the user's `$D
 
 Run `/settings` to customize the TUI. The overlay controls themes, colors, tool expansion, startup release notes, daily update checks, and the composer status bar, including telemetry visibility, compact/full labels, and the order of Context, Cache, Tokens, Latency, Time, and Activity groups. Use up/down to navigate and left/right to change a value; preferences are stored in the user settings document. Use `/changelog` for recent release notes or `/changelog full` for the complete packaged history. Update checks only report a newer npm version and never install it automatically.
 
-Skills are discovered from project/user `.dsh/skills` and `.agents/skills` roots. MCP servers are loaded from user and project `.dsh/mcp.json` files; see [Skills and MCP](https://github.com/vanducng/oh-my-dsh/blob/main/docs/skills-and-mcp.md) for the configuration shape and TUI commands.
+Skills are discovered from project/user `.dsh/skills` and `.agents/skills` roots. MCP servers are loaded from user and project `.dsh/mcp.json` files. Out-of-tree Harness plugins mount from `$DSH_HOME/omdsh/plugins.yml` (packages under `$DSH_HOME/omdsh/node_modules`), and `$DSH_HOME/omdsh/cordis.patch.yml` patches the composed tree. See [Skills, MCP, and Plugins](https://github.com/vanducng/oh-my-dsh/blob/main/docs/skills-and-mcp.md) for the configuration shapes and TUI commands.
 
 ## Verify
 

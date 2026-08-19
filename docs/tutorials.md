@@ -149,7 +149,7 @@ Run `/help` for the complete command and keyboard-shortcut catalog. The command 
 
 Project Skills live under `.dsh/skills` or `.agents/skills`. After adding a human-invocable Skill, type `/skill:` to browse and filter it alongside other commands. MCP servers are configured in `.dsh/mcp.json`; `/mcp` shows connected servers and `/tools` shows their tools beside native Harness tools.
 
-Follow [Skills and MCP](skills-and-mcp.md) for complete search priority, `SKILL.md` structure, stdio and HTTP examples, environment expansion, override rules, and current protocol limitations.
+Follow [Skills, MCP, and Plugins](skills-and-mcp.md) for complete search priority, `SKILL.md` structure, stdio and HTTP examples, environment expansion, override rules, out-of-tree plugin rows, and current protocol limitations.
 
 ## Quick reference
 

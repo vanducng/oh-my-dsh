@@ -37,7 +37,7 @@ Run `/login` once inside omdsh to validate and save your DeepSeek API key, then 
 ## Learn
 
 - [Tutorials](docs/tutorials.md) — complete a first task, add precise context, guide queued work, recover long sessions, and customize the environment.
-- [Skills and MCP](docs/skills-and-mcp.md) — extend a project with reusable instructions and external tools.
+- [Skills, MCP, and Plugins](docs/skills-and-mcp.md) — extend a project with reusable instructions, external tools, and out-of-tree Harness plugins.
 - [Architecture](docs/architecture.md) — understand the plugin boundaries and runtime data flow.
 - [Performance](docs/performance.md) — inspect the benchmarks, methodology, and rendering optimizations.
 
@@ -80,7 +80,7 @@ See the reproducible [TUI performance report](docs/performance.md) or run `pnpm 
 
 Run `/login` to open the DeepSeek API Key dashboard, enter a key in a masked prompt, validate it, and save it through the Harness credential store. An interactively selected key takes priority over an inherited `DEEPSEEK_API_KEY` on subsequent requests and across restarts. `/logout` removes the omdsh-managed choice and falls back to the environment when available.
 
-Model settings can also come from `$DSH_HOME/settings.yaml`. Catalog and custom providers live under the `llm-pi-ai:` section of that document, using `apiKeyEnv` references instead of inline secrets. `/model` and `--provider` list every registered route, including those extra providers. Skills and MCP configuration are documented in [Skills and MCP](docs/skills-and-mcp.md).
+Model settings can also come from `$DSH_HOME/settings.yaml`. Catalog and custom providers live under the `llm-pi-ai:` section of that document, using `apiKeyEnv` references instead of inline secrets. `/model` and `--provider` list every registered route, including those extra providers. Skills, MCP, and out-of-tree plugin configuration are documented in [Skills, MCP, and Plugins](docs/skills-and-mcp.md).
 
 After an upgrade, omdsh can show release notes once at startup. Use `/changelog` for recent entries or `/changelog full` for the complete packaged history. A cached daily npm check reports newer versions without installing anything automatically; both behaviors can be customized in `/settings`.
 
