@@ -76,7 +76,7 @@ Discovered tools use `mcp__<server>__<tool>` names and enter the normal Harness 
 
 ## Plugins
 
-The shipped composition can be extended with out-of-tree DeepSeek Harness plugins through two optional files in the omdsh namespace of the Harness home (`$OMDSH_HOME/omdsh`, or `$DSH_HOME/omdsh`, then `~/.dsh/omdsh`):
+Two optional files in the omdsh namespace of the Harness home (`$OMDSH_HOME/omdsh`, or `$DSH_HOME/omdsh`, then `~/.dsh/omdsh`) extend the shipped composition with out-of-tree DeepSeek Harness plugins:
 
 1. `plugins.yml` — a YAML entry list of extra plugin rows. It is mounted through its own include, so bare package names resolve beside the file: install packages into `~/.dsh/omdsh/node_modules` with a normal package manager.
 2. `cordis.patch.yml` — a patch list applied after the shipped composition and the MCP rows: id-targeted config overrides, disables, and insert lists, with `!!js` expressions allowed.

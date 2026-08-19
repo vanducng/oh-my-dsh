@@ -76,7 +76,7 @@ omdsh 按以下顺序读取 MCP 配置：
 
 ## 插件
 
-通过 Harness Home 的 omdsh 命名空间（`$OMDSH_HOME/omdsh`，若未设置则依次使用 `$DSH_HOME/omdsh` 和 `~/.dsh/omdsh`）中的两个可选文件，可以在出厂组合之上扩展树外 DeepSeek Harness 插件：
+Harness Home 的 omdsh 命名空间（`$OMDSH_HOME/omdsh`，若未设置则依次使用 `$DSH_HOME/omdsh` 和 `~/.dsh/omdsh`）中的两个可选文件，在出厂组合之上扩展树外 DeepSeek Harness 插件：
 
 1. `plugins.yml` — 一份额外插件行的 YAML 条目列表。它通过独立的 include 挂载，因此裸包名会在该文件旁解析：用普通包管理器把包安装到 `~/.dsh/omdsh/node_modules` 即可。
 2. `cordis.patch.yml` — 一份补丁列表，在出厂组合和 MCP 行之后应用：按 id 定向的配置覆盖、禁用与插入列表，允许 `!!js` 表达式。
