@@ -90,19 +90,6 @@ npm install dsh-observe
 
 ```yaml
 # ~/.dsh/omdsh/plugins.yml
-- id: storage
-  name: '@deepseek-ai/dsh-storage'
-
-- id: storage-json
-  name: '@deepseek-ai/dsh-storage-json'
-  config:
-    root: !!js "(process.env.OMDSH_HOME || process.env.DSH_HOME || process.env.HOME + '/.dsh') + '/storages'"
-
-- id: storage-domain
-  name: '@deepseek-ai/dsh-storage-domain'
-  config:
-    backend: json
-
 - id: dsh-observe
   name: dsh-observe
   config:
@@ -110,6 +97,8 @@ npm install dsh-observe
     langfuse: !!js "process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY ? { baseUrl: process.env.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com', publicKey: process.env.LANGFUSE_PUBLIC_KEY, secretKey: process.env.LANGFUSE_SECRET_KEY } : null"
 ```
 
-A row mounts one plugin with its config; a plugin that requires additional services (here the storage trio for the durable offline buffer) documents its own rows. Both files fail loud: a present file that cannot parse or mount aborts startup instead of silently skipping the layer.
+A row mounts one plugin with its config. The base composition already provides the storage facility (`storage`, `storage-json`, `storage-domain`) that plugins such as dsh-observe use for durable buffers; a plugin that requires services beyond the base composition documents its own rows. Both files fail loud: a present file that cannot parse or mount aborts startup instead of silently skipping the layer.
+
+The row format is provisional: a later release is expected to adopt the upstream profile and bundle contract (`dsh plugin add`), which replaces hand-written rows for plugins that ship a `dsh.bundle` manifest.
 
 A plugin runs with the same permissions as omdsh itself — it can read files, use credentials, and reach the network. Review the source before installing, exactly as you would for an MCP server.

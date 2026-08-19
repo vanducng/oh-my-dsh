@@ -90,19 +90,6 @@ npm install dsh-observe
 
 ```yaml
 # ~/.dsh/omdsh/plugins.yml
-- id: storage
-  name: '@deepseek-ai/dsh-storage'
-
-- id: storage-json
-  name: '@deepseek-ai/dsh-storage-json'
-  config:
-    root: !!js "(process.env.OMDSH_HOME || process.env.DSH_HOME || process.env.HOME + '/.dsh') + '/storages'"
-
-- id: storage-domain
-  name: '@deepseek-ai/dsh-storage-domain'
-  config:
-    backend: json
-
 - id: dsh-observe
   name: dsh-observe
   config:
@@ -110,6 +97,8 @@ npm install dsh-observe
     langfuse: !!js "process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY ? { baseUrl: process.env.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com', publicKey: process.env.LANGFUSE_PUBLIC_KEY, secretKey: process.env.LANGFUSE_SECRET_KEY } : null"
 ```
 
-一行挂载一个插件及其配置；如果插件依赖额外服务（这里是持久离线缓冲所需的 storage 三件套），其自身文档会给出对应的行。这两个文件都会响亮地失败：存在但无法解析或挂载的文件会中止启动，而不是静默跳过该层。
+一行挂载一个插件及其配置。出厂组合已提供 storage 设施（`storage`、`storage-json`、`storage-domain`），dsh-observe 等插件的持久缓冲会直接使用它；如果插件依赖出厂组合之外的服务，其自身文档会给出对应的行。这两个文件都会响亮地失败：存在但无法解析或挂载的文件会中止启动，而不是静默跳过该层。
+
+行格式目前是过渡方案：后续版本预计会采用上游的 profile 与 bundle 契约（`dsh plugin add`），届时声明了 `dsh.bundle` 清单的插件将不再需要手写行。
 
 插件与 omdsh 本身拥有相同的权限 — 它可以读取文件、使用凭据并访问网络。安装前请检查源码，就像对待 MCP Server 一样。

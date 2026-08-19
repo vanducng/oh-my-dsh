@@ -44,6 +44,21 @@
   config:
     dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
 
+# Plugin-facing storage facility, mounted at the harness release omdsh pins
+# so out-of-tree plugins share one instance instead of installing their own.
+- id: storage
+  name: '@deepseek-ai/dsh-storage'
+
+- id: storage-json
+  name: '@deepseek-ai/dsh-storage-json'
+  config:
+    root: !!js "(process.env.OMDSH_HOME || process.env.DSH_HOME || process.env.HOME + '/.dsh') + '/storages'"
+
+- id: storage-domain
+  name: '@deepseek-ai/dsh-storage-domain'
+  config:
+    backend: json
+
 # User settings document ($DSH_HOME/settings.yaml) and credential sources
 # (inherited env, managed .credentials.yaml, project/user .env) — the same
 # rows the harness base mounts, so omdsh honors the user's existing model
