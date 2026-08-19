@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.7.0](https://github.com/vanducng/oh-my-dsh/compare/v0.6.1...v0.7.0) (2026-08-19)
+
+
+### Features
+
+* **omdsh:** mount user plugin and patch layers from the harness home ([#13](https://github.com/vanducng/oh-my-dsh/issues/13)) ([8bf686e](https://github.com/vanducng/oh-my-dsh/commit/8bf686efa4b2eeabd7afdf423cb9502846ba2573))
+
 ## [0.6.1](https://github.com/vanducng/oh-my-dsh/compare/v0.6.0...v0.6.1) (2026-08-19)
 
 
