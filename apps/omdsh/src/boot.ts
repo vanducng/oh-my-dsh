@@ -12,6 +12,7 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.ts'
 import { loadMcpPatches } from './mcp-config.ts'
+import { loadUserPatches, userPluginsPatches } from './user-patches.ts'
 
 export const NAME = 'omdsh'
 
@@ -41,7 +42,7 @@ export async function runOmdsh(
   process.on('SIGINT', () => { interrupt(130) })
   installFailLoud(NAME, process, async () => { await app.current?.fiber.dispose() })
   const environment = loadLayeredEnv(NAME)
-  const ctx = await boot(NAME, CONFIG_PATH, loadMcpPatches(), (hostCtx) => {
+  const ctx = await boot(NAME, CONFIG_PATH, [...loadMcpPatches(), ...userPluginsPatches(), ...loadUserPatches()], (hostCtx) => {
     app.current = hostCtx
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
     provideCmdline(hostCtx, {

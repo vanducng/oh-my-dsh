@@ -60,7 +60,7 @@ Pure algorithms remain internal modules: ANSI parsing, display-cell width, Markd
 - filesystem skill discovery and project/user MCP server adapters;
 - the local TUI provider, tool-presentation bridge, session runtime, human-interaction adapter, command contributions, startup notices, and runner.
 
-Skills and MCP deployment details live in [`skills-and-mcp.md`](skills-and-mcp.md).
+Skills, MCP, and out-of-tree plugin deployment details live in [`skills-and-mcp.md`](skills-and-mcp.md).
 
 ## Data and interaction flow
 

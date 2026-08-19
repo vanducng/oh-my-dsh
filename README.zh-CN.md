@@ -37,7 +37,7 @@ omdsh
 ## 学习指南
 
 - [教程](docs/tutorials.zh-CN.md) — 完成第一个任务、提供精确上下文、引导队列任务、恢复长会话并定制工作环境。
-- [Skills 与 MCP](docs/skills-and-mcp.zh-CN.md) — 使用可复用指令和外部工具扩展项目。
+- [Skills、MCP 与插件](docs/skills-and-mcp.zh-CN.md) — 使用可复用指令、外部工具和树外 Harness 插件扩展项目。
 - [架构](docs/architecture.zh-CN.md) — 了解插件边界与运行时数据流。
 - [性能](docs/performance.zh-CN.md) — 查看 Benchmark、测试方法与渲染优化。
 
@@ -80,7 +80,7 @@ TUI 软件包拆分为 Service Definition、本地终端 Provider、会话与交
 
 运行 `/login` 可以打开 DeepSeek API Key 管理页，通过遮罩输入框接收和验证 Key，再将其保存到 Harness 凭据存储中。用户主动选择的 Key 会从后续模型请求开始优先于继承的 `DEEPSEEK_API_KEY`，重启后仍然有效。`/logout` 会删除这份由 omdsh 管理的配置，并在环境变量可用时回退到环境变量。
 
-模型配置也可以来自 `$DSH_HOME/settings.yaml`。目录 Provider 和自定义 Provider 写在该文档的 `llm-pi-ai:` 段，通过 `apiKeyEnv` 引用凭据，不要把密钥写进文件。`/model` 和 `--provider` 会列出所有已注册路由，包括这些额外 Provider。Skills 与 MCP 的配置方式请参阅 [Skills 与 MCP](docs/skills-and-mcp.zh-CN.md)。
+模型配置也可以来自 `$DSH_HOME/settings.yaml`。目录 Provider 和自定义 Provider 写在该文档的 `llm-pi-ai:` 段，通过 `apiKeyEnv` 引用凭据，不要把密钥写进文件。`/model` 和 `--provider` 会列出所有已注册路由，包括这些额外 Provider。Skills、MCP 与树外插件的配置方式请参阅 [Skills、MCP 与插件](docs/skills-and-mcp.zh-CN.md)。
 
 升级后，omdsh 可以在启动时只展示一次版本说明。使用 `/changelog` 查看近期条目，或使用 `/changelog full` 查看随包发布的完整历史。程序每天至多执行一次带缓存的 npm 版本检查，只提示新版本而不会自动安装；这两项行为都可以在 `/settings` 中调整。
 
