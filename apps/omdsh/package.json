@@ -1,7 +1,7 @@
 {
   "name": "@vanducng/oh-my-dsh",
   "description": "omdsh: TUI coding agent command over the DeepSeek Harness runtime",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "homepage": "https://github.com/vanducng/oh-my-dsh#readme",
   "repository": {
     "type": "git",

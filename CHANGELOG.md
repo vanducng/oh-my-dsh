@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.6.1](https://github.com/vanducng/oh-my-dsh/compare/v0.6.0...v0.6.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **ci:** scope markdown checks to committable files ([#11](https://github.com/vanducng/oh-my-dsh/issues/11)) ([2059d07](https://github.com/vanducng/oh-my-dsh/commit/2059d07420706197266c953cd9059eb29048b9f3))
+
 ## [0.6.0](https://github.com/vanducng/oh-my-dsh/compare/v0.5.2...v0.6.0) (2026-08-18)
 
 
