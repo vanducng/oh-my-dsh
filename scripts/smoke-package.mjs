@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -24,12 +24,14 @@ const childEnv = Object.fromEntries(
   ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])),
 )
 
-function execute(command, args, cwd = root) {
+function execute(command, args, cwd = root, extraEnv = undefined, input = undefined) {
   return spawnSync(command, args, {
     cwd,
-    env: childEnv,
+    env: extraEnv === undefined ? childEnv : { ...childEnv, ...extraEnv },
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
+    ...(input === undefined ? {} : { input }),
+    timeout: 120_000,
   })
 }
 
@@ -81,7 +83,32 @@ try {
     throw new Error('omdsh accepted an unknown flag')
   }
 
-  console.log(`packed CLI ${cliVersion} with @vanducng/dsh-tui@${tuiDep}`)
+  // Bare plugin names outside the app need the loader's native helper, which the packed install must ship.
+  const home = join(temp, 'dsh-home')
+  const pluginDir = join(home, 'omdsh', 'node_modules', 'omdsh-smoke-plugin')
+  mkdirSync(pluginDir, { recursive: true })
+  writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: 'omdsh-smoke-plugin', type: 'module', main: './index.js' }))
+  writeFileSync(join(pluginDir, 'index.js'), [
+    "import { writeFileSync } from 'node:fs'",
+    "export const name = 'omdsh-smoke-plugin'",
+    'export function apply() {',
+    "  writeFileSync(process.env.OMDSH_SMOKE_PLUGIN_OUT, 'mounted')",
+    '}',
+    '',
+  ].join('\n'))
+  writeFileSync(join(home, 'omdsh', 'plugins.yml'), '- id: smoke-plugin\n  name: omdsh-smoke-plugin\n')
+  const marker = join(temp, 'smoke-plugin-mounted')
+  const boot = execute(bin, [], temp, {
+    OMDSH_HOME: home,
+    DEEPSEEK_API_KEY: 'sk-mock',
+    OMDSH_SMOKE_PLUGIN_OUT: marker,
+    NO_COLOR: '1',
+  }, '')
+  if (boot.status !== 0 || !existsSync(marker)) {
+    throw new Error(`packed bin failed to mount a user plugin by bare name: exit ${boot.status}: ${(boot.stderr || boot.stdout).slice(-800)}`)
+  }
+
+  console.log(`packed CLI ${cliVersion} with @vanducng/dsh-tui@${tuiDep}; user plugin mounted`)
 } finally {
   rmSync(temp, { recursive: true, force: true })
 }
