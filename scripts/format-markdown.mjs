@@ -1,19 +1,38 @@
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
+import { promisify } from 'node:util'
 
 const root = resolve(import.meta.dirname, '..')
 const check = process.argv.includes('--check')
-const skippedDirectories = new Set(['.git', 'lib', 'node_modules', 'refs'])
+const execFileAsync = promisify(execFile)
 
-async function markdownFiles(directory) {
-  const files = []
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isDirectory() && skippedDirectories.has(entry.name)) continue
-    const path = resolve(directory, entry.name)
-    if (entry.isDirectory()) files.push(...await markdownFiles(path))
-    else if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'CHANGELOG.md') files.push(path)
-  }
-  return files
+async function markdownFiles() {
+  const { stdout } = await execFileAsync('git', [
+    'ls-files',
+    '-z',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+    '--deduplicate',
+    '--',
+    '*.md',
+  ], { cwd: root, encoding: 'utf8' })
+
+  const paths = stdout
+    .split('\0')
+    .filter(path => path !== '' && path !== 'CHANGELOG.md' && !path.endsWith('/CHANGELOG.md'))
+    .map(path => resolve(root, path))
+
+  const files = await Promise.all(paths.map(async (path) => {
+    try {
+      return (await stat(path)).isFile() ? path : undefined
+    } catch (error) {
+      if (error?.code === 'ENOENT') return undefined
+      throw error
+    }
+  }))
+  return files.filter(file => file !== undefined)
 }
 
 function isStandaloneBlock(line) {
@@ -95,7 +114,7 @@ function formatMarkdown(source) {
 }
 
 const changed = []
-for (const file of await markdownFiles(root)) {
+for (const file of await markdownFiles()) {
   const source = await readFile(file, 'utf8')
   const formatted = formatMarkdown(source)
   if (formatted === source) continue

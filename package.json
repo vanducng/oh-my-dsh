@@ -21,7 +21,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "benchmark:tui": "tsx scripts/benchmark-tui.mts",
-    "test": "pnpm -r test",
+    "test": "node --test scripts/format-markdown.spec.mjs && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "format:md": "node scripts/format-markdown.mjs",
     "check:md": "node scripts/format-markdown.mjs --check",
