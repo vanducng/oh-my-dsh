@@ -56,7 +56,7 @@ Pure algorithms remain internal modules: ANSI parsing, display-cell width, Markd
 - Cordis loader and timer infrastructure;
 - the official DeepSeek LLM adapter, the dormant pi-ai multi-provider adapter, settings, credentials, default model, Agent preset roster, Code runtime, and Agent runtime;
 - durable JSONL sessions, checkpointing, query, file and session references, title, statistics, and token projections;
-- local attachment, filesystem, subprocess, bash, sandbox, and permission providers;
+- local attachment, plugin-facing storage (`storage`, `storage-json`, `storage-domain`), filesystem, subprocess, bash, sandbox, and permission providers;
 - the Standard, PTC, Minimal, and Cordis Agent-plane compositions, plus Harness commands, compaction, todo, goal, plan, approval, questions, and subagents;
 - filesystem skill discovery and project/user MCP server adapters;
 - the local TUI provider, tool-presentation bridge, session runtime, human-interaction adapter, command contributions, startup notices, and runner.
@@ -98,7 +98,7 @@ New contribution registries for themes, status segments, overlays, or key action
 - Runtime tests cover command registration, session creation and recovery, queueing, projections, model and permission selection, human interaction, and disposal.
 - `pnpm smoke:happy` boots the complete composition against the published Harness mock LLM path.
 - `pnpm smoke` exercises the built command through a real PTY for raw input, rendering, interruption, and exit behavior.
-- `pnpm smoke:tui` feeds that PTY into `@xterm/headless` and asserts the rendered 80x30 cell grid for boot/status, `/agent`, the `@`-file popup, and Ctrl+G. A second boot loads a sanitized copy of the public `vanducng/dotfiles` dsh home (never committed here). It checks the `dsh-observe` include and that `grok-4.6` reaches the footer; as-is boot currently fails loud because `dsh-observe` waits for `storageDomain`.
+- `pnpm smoke:tui` feeds that PTY into `@xterm/headless` and asserts the rendered 80x30 cell grid for boot/status, `/agent`, the `@`-file popup, and Ctrl+G. A second boot loads a sanitized copy of the public `vanducng/dotfiles` dsh home (never committed here). It checks the `dsh-observe` include and that `grok-4.6` reaches the footer with `plugins.yml` still mounted.
 - Dependency-boundary checks require published npm packages, clean reference submodules, and no links or aliases into `refs/`.
 
 The exact commands required for a change are defined in [`AGENTS.md`](../AGENTS.md).
