@@ -98,7 +98,7 @@ Skills 与 MCP 的部署细节见 [`skills-and-mcp.zh-CN.md`](skills-and-mcp.zh-
 - Runtime 测试覆盖命令注册、会话创建与恢复、消息队列、Projection、模型与权限选择、人机交互和资源清理。
 - `pnpm smoke:happy` 使用已发布 Harness Mock LLM 路径启动完整组合。
 - `pnpm smoke` 通过真实 PTY 运行构建后的命令，验证 raw input、渲染、中断和退出行为。
-- `pnpm smoke:tui` 把该 PTY 送入 `@xterm/headless`，并在渲染后的 80x30 单元格网格上断言启动/状态、`/agent`、`@` 文件弹出层和 Ctrl+G。第二次启动会加载一份经过脱敏的公开 `vanducng/dotfiles` dsh 主目录（不会提交到本仓库），并检查 `grok-4.6` / `dsh-observe` 能否起来。
+- `pnpm smoke:tui` 把该 PTY 送入 `@xterm/headless`，并在渲染后的 80x30 单元格网格上断言启动/状态、`/agent`、`@` 文件弹出层和 Ctrl+G。第二次启动会加载一份经过脱敏的公开 `vanducng/dotfiles` dsh 主目录（不会提交到本仓库）。它检查 `dsh-observe` 的 include，以及 `grok-4.6` 是否出现在页脚；按原样启动目前会响亮失败，因为 `dsh-observe` 在等待 `storageDomain`。
 - 依赖边界检查要求使用已发布的 npm 软件包、保持参考子模块干净，并禁止指向 `refs/` 的链接或别名。
 
 改动所需执行的具体命令由 [`AGENTS.md`](../AGENTS.md) 规定。

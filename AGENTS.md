@@ -91,7 +91,7 @@ git diff --check
 GitHub Actions runs this set, plus `pnpm check:boundaries`, on pull requests and on pushes to `main`.
 
 - Run `pnpm smoke` when changing raw TTY input, viewport behavior, scrolling, cursor placement, Ctrl-C/Ctrl-D handling, or built-command startup.
-- Run `pnpm smoke:tui` when changing full-screen layout, session-mode overlays, composer popups, or keybindings that must be visible on the rendered 80x30 grid. That command also boots a sanitized copy of the public `vanducng/dotfiles` dsh home (never committed here) and checks that `grok-4.6` and `dsh-observe` come up.
+- Run `pnpm smoke:tui` when changing full-screen layout, session-mode overlays, composer popups, or keybindings that must be visible on the rendered 80x30 grid. That command also boots a sanitized copy of the public `vanducng/dotfiles` dsh home (never committed here). It checks the `dsh-observe` include and that `grok-4.6` reaches the footer. As-is boot currently fails loud because `dsh-observe` waits for `storageDomain`.
 - A change is not complete if configuration, lockfiles, source files, scripts, or dependency symlinks still point into `refs/`.
 - Before finishing dependency-boundary work, audit with commands equivalent to:
 
