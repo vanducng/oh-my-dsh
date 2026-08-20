@@ -7,6 +7,10 @@ packages:
 
 linkWorkspacePackages: true
 
+# Vite 5.4 / Vitest 2.1 pull esbuild 0.21, which cannot parse tsconfig target es2024.
+overrides:
+  esbuild: 0.25.12
+
 peerDependencyRules:
   allowedVersions:
     typescript: '>=5 <7'
