@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 /**
  * Full-screen TUI smoke: node-pty + `@xterm/headless` 80x30 grid.
- * Uses the published mock LLM. Does not call cliproxy.
+ * Deterministic scenarios use the published mock LLM. One extra boot loads a
+ * sanitized copy of vanducng/dotfiles dsh settings (not committed here).
  *
  * Run: node scripts/tui-grid-smoke.mjs
  * Update snapshots: OMDSH_UPDATE_TUI_SNAPSHOTS=1 node scripts/tui-grid-smoke.mjs
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { startMockLlmServer } from '@deepseek-ai/dsh-llm-mock-server'
-import { compareSnapshot, gridFrom, lastRows, normalizeGrid, spawnGridSession } from './tui-grid.mjs'
+import { materializeDotfilesHome, recordDotfilesTrace, redactSecrets } from './tui-grid-dotfiles.mjs'
+import { compareSnapshot, gridFrom, lastRows, normalizeGrid, REPO_ROOT, spawnGridSession } from './tui-grid.mjs'
 
-const root = fileURLToPath(new URL('..', import.meta.url))
 const workspace = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-ws-'))
 const home = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-home-'))
 const editorMarker = join(home, 'editor-invoked')
@@ -176,6 +177,130 @@ try {
 
 if (failed || session.exitCode !== 0) {
   console.error(`TUI_GRID_SMOKE_FAIL exit=${session.exitCode}`)
+  process.exit(1)
+}
+
+const require = createRequire(import.meta.url)
+
+async function runDotfilesBoot() {
+  const home = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-dotfiles-'))
+  const workspace = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-dotfiles-ws-'))
+  process.on('exit', () => {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(workspace, { recursive: true, force: true })
+  })
+  mkdirSync(join(workspace, 'src'))
+  writeFileSync(join(workspace, 'README.md'), 'dotfiles fixture\n')
+  writeFileSync(join(workspace, 'src/index.ts'), 'export {}\n')
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: workspace })
+  execFileSync('git', ['add', 'README.md', 'src/index.ts'], { cwd: workspace })
+  execFileSync('git', ['-c', 'user.name=omdsh', '-c', 'user.email=omdsh@localhost', 'commit', '--quiet', '-m', 'fixture'], { cwd: workspace })
+
+  const cliproxyBaseUrl = process.env.CLI_PROXY_BASE_URL
+  const materialized = await materializeDotfilesHome(home, { cliproxyBaseUrl })
+  console.log('DOTFILES_PATHS ' + materialized.copied.join(' '))
+
+  const childEnv = {
+    ...process.env,
+    OMDSH_HOME: home,
+    DSH_HOME: home,
+    NO_COLOR: '1',
+    TERM: 'xterm-256color',
+  }
+  delete childEnv.OMDSH_MODEL
+  delete childEnv.OMDSH_PROVIDER
+  delete childEnv.DEEPSEEK_BASE_URL
+  delete childEnv.DEEPSEEK_API_KEY
+
+  const tsx = require.resolve('tsx/cli', { paths: [join(REPO_ROOT, 'apps/omdsh'), REPO_ROOT] })
+  const dump = spawnSync(process.execPath, [tsx, join(REPO_ROOT, 'apps/omdsh/src/bin.ts'), '--dump-config'], {
+    cwd: workspace,
+    env: childEnv,
+    encoding: 'utf8',
+    timeout: 60_000,
+  })
+  const dumpText = dump.stdout + dump.stderr
+  if (dump.status !== 0) {
+    throw new Error(`dotfiles --dump-config exit=${dump.status} ${redactSecrets(dumpText).slice(0, 800)}`)
+  }
+  for (const marker of ['id: dsh-observe', 'omdsh/plugins.yml', 'id: llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai']) {
+    if (!dumpText.includes(marker)) {
+      throw new Error(`dotfiles dump missing ${marker}`)
+    }
+  }
+  console.log('PASS dotfiles plugin mount (dsh-observe, llm-pi-ai)')
+
+  const live = spawnGridSession({ cwd: workspace, env: childEnv })
+  try {
+    const boot = await live.waitFor(
+      (text) => text.includes('Into the Unknown') && text.includes('🐳') && /grok-4\.6|Grok 4\.6/u.test(text),
+      'dotfiles boot footer with grok-4.6',
+    )
+    if (!/grok-4\.6|Grok 4\.6/u.test(boot)) {
+      throw new Error(`dotfiles footer missing grok-4.6\n${redactSecrets(lastRows(boot, 8))}`)
+    }
+    console.log('PASS dotfiles boot footer/model')
+    const bootTrace = await recordDotfilesTrace({
+      name: 'dotfiles-config-boot',
+      ok: true,
+      input: { paths: materialized.copied },
+      output: { boot: true, model: 'grok-4.6' },
+    })
+    if (!bootTrace.skipped) console.log(`TRACE dotfiles-config-boot id=${bootTrace.traceId}`)
+
+    const canLive = Boolean(process.env.CLI_PROXY_BASE_URL && process.env.CLI_PROXY_API_KEY)
+    if (!canLive) {
+      console.log('SKIP dotfiles live cliproxy turn (CLI_PROXY_* unset)')
+      live.write('\x03')
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      live.write('\x03')
+      await live.waitFor(() => live.exitCode !== null, 'dotfiles clean exit', { timeout: 20_000, stableMs: 0 })
+      return
+    }
+
+    const livePrompt = 'Reply with only: dotfiles-pong'
+    try {
+      live.write(livePrompt + '\r')
+      const reply = await live.waitFor(
+        (text) => text.replace(livePrompt, '').includes('dotfiles-pong'),
+        'dotfiles cliproxy reply',
+        { timeout: 90_000 },
+      )
+      if (!reply.replace(livePrompt, '').includes('dotfiles-pong')) {
+        throw new Error('dotfiles live turn produced no pong')
+      }
+      console.log('PASS dotfiles live cliproxy turn')
+      const traced = await recordDotfilesTrace({
+        name: 'dotfiles-config-live-turn',
+        ok: true,
+        input: { model: 'grok-4.6', prompt: livePrompt },
+        output: { boot: true, liveTurn: true },
+      })
+      if (!traced.skipped) console.log(`TRACE dotfiles-config-live-turn id=${traced.traceId}`)
+    } catch (error) {
+      console.error(redactSecrets(error instanceof Error ? error.message : String(error)))
+      console.log('SKIP dotfiles live cliproxy turn (boot still passed)')
+      await recordDotfilesTrace({
+        name: 'dotfiles-config-live-turn',
+        ok: false,
+        input: { model: 'grok-4.6', prompt: livePrompt },
+        output: { boot: true, liveTurn: 'failed' },
+      })
+    }
+
+    live.write('\x03')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    live.write('\x03')
+    await live.waitFor(() => live.exitCode !== null, 'dotfiles clean exit', { timeout: 20_000, stableMs: 0 })
+  } finally {
+    live.dispose()
+  }
+}
+
+try {
+  await runDotfilesBoot()
+} catch (error) {
+  console.error(redactSecrets(error instanceof Error ? error.message : String(error)))
   process.exit(1)
 }
 console.log('TUI_GRID_SMOKE_PASS exit=' + session.exitCode)

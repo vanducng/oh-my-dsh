@@ -95,7 +95,7 @@ pnpm test                # 单元测试与管道模式测试
 pnpm build               # 构建全部 workspace 软件包
 pnpm smoke               # 交互式 PTY 冒烟测试
 pnpm smoke:happy         # 使用模拟 LLM 验证正常流程
-pnpm smoke:tui           # 80x30 VT 网格冒烟测试
+pnpm smoke:tui           # 80x30 VT 网格冒烟测试（模拟 LLM，外加一份经过脱敏的 vanducng/dotfiles dsh 启动）
 ```
 
 `refs/deepseek-harness`、`refs/oh-my-pi` 与 `refs/pi` 中的代码是只读参考项目。开发 omdsh 时不要将它们用作运行时依赖，也不要修改其内容。
