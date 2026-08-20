@@ -9,7 +9,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockLlmServer } from '@deepseek-ai/dsh-llm-mock-server'
@@ -223,12 +223,15 @@ async function runDotfilesBoot() {
   if (dump.status !== 0) {
     throw new Error(`dotfiles --dump-config exit=${dump.status} ${redactSecrets(dumpText).slice(0, 800)}`)
   }
-  for (const marker of ['id: dsh-observe', 'omdsh/plugins.yml', 'id: llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai']) {
+  for (const marker of ['omdsh-user-plugins', 'omdsh/plugins.yml', 'id: llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai']) {
     if (!dumpText.includes(marker)) {
       throw new Error(`dotfiles dump missing ${marker}`)
     }
   }
-  console.log('PASS dotfiles plugin mount (dsh-observe, llm-pi-ai)')
+  if (!existsSync(join(home, 'omdsh/node_modules/dsh-observe'))) {
+    throw new Error('dotfiles home missing omdsh/node_modules/dsh-observe')
+  }
+  console.log('PASS dotfiles plugin mount (omdsh-user-plugins include, dsh-observe installed, llm-pi-ai)')
 
   const live = spawnGridSession({ cwd: workspace, env: childEnv })
   try {
