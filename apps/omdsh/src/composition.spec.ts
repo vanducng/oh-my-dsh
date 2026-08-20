@@ -137,6 +137,8 @@ describe('boot patch assembly', () => {
     expect(dump).toContain('id: tui')
     expect(dump).toMatch(/disabled:\s*true/u)
     expect(dump).toContain('name: \'@vanducng/dsh-tui\'')
+    expect(dump).toContain('id: llm-pi-ai')
+    expect(dump).toContain('@deepseek-ai/dsh-llm-pi-ai')
     expect(dump).toContain(SHIPPED_PRESET_ROOT)
     expect(dump).not.toContain('mcp.json')
   })

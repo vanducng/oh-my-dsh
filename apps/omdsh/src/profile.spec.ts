@@ -34,6 +34,7 @@ describe('omdsh profile', () => {
     const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
       dsh?: { profile?: { bundles?: string[] } }
     }
+    expect(PRODUCT_BUNDLE).toBe('@vanducng/oh-my-dsh')
     expect(manifest.dsh?.profile?.bundles).toEqual([PRODUCT_BUNDLE])
     expect(existsSync(join(dir, PROFILE_PATCH_FILENAME))).toBe(true)
   })
