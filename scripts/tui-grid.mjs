@@ -14,6 +14,7 @@ const pty = require('node-pty')
 
 export const COLS = 80
 export const ROWS = 30
+export const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 export const SNAPSHOT_DIR = fileURLToPath(new URL('./tui-grid-snapshots/', import.meta.url))
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -67,6 +68,20 @@ export class HeadlessGrid {
   dispose() {
     this.term.dispose()
   }
+}
+
+/** Lines from the first match of `start` through the bottom of the grid. */
+export function gridFrom(text, start) {
+  const lines = text.replace(/\n$/u, '').split('\n')
+  const index = lines.findIndex((line) => line.includes(start))
+  if (index < 0) throw new Error(`grid region ${JSON.stringify(start)} not found\n${text}`)
+  return lines.slice(index).join('\n')
+}
+
+/** Last `count` rendered rows. */
+export function lastRows(text, count) {
+  const lines = text.replace(/\n$/u, '').split('\n')
+  return lines.slice(-count).join('\n')
 }
 
 /** Replace run-specific paths so committed grids stay reviewable. */
@@ -135,8 +150,11 @@ export function spawnGridSession(options) {
   const rows = options.rows ?? ROWS
   const grid = new HeadlessGrid({ cols, rows })
   const spawnCmd = process.env.OMDSH_RUN_MODE === 'built'
-    ? [process.execPath, ['apps/omdsh/lib/bin.js']]
-    : ['pnpm', ['--dir', 'apps/omdsh', 'omdsh']]
+    ? [process.execPath, [join(REPO_ROOT, 'apps/omdsh/lib/bin.js')]]
+    : [process.execPath, [
+      require.resolve('tsx/cli', { paths: [join(REPO_ROOT, 'apps/omdsh'), REPO_ROOT] }),
+      join(REPO_ROOT, 'apps/omdsh/src/bin.ts'),
+    ]]
   const term = pty.spawn(spawnCmd[0], spawnCmd[1], {
     name: 'xterm-256color',
     cols,

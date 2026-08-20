@@ -1,0 +1,10 @@
+
+
+╭─ 🐳 ─────────────────────────────────────────────────────── workspace write ─╮
+│ @z                                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+❯ src/
+  README.md
+  1/2 · ↑↓ select · Tab insert · Enter send · Esc close
+  deepseek-v4-flash · high · ptc · both   $WORKSPACE · main  
+  Ctx 0% · 0/1M                                              0 turns · 0 steps  

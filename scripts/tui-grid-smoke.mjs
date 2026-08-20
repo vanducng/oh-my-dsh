@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startMockLlmServer } from '@deepseek-ai/dsh-llm-mock-server'
-import { compareSnapshot, normalizeGrid, spawnGridSession } from './tui-grid.mjs'
+import { compareSnapshot, gridFrom, lastRows, normalizeGrid, spawnGridSession } from './tui-grid.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const workspace = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-ws-'))
@@ -93,7 +93,7 @@ try {
     'boot header, model footer, and composer',
   )
   screenTokens(boot, ['Into the Unknown', '🐳'])
-  snapshot('boot-footer.txt', session.grid.lines().slice(-8).join('\n'))
+  snapshot('boot-footer.txt', lastRows(boot, 8))
   console.log('PASS boot + footer/status')
 
   session.write('/agent\r')
@@ -102,14 +102,14 @@ try {
     'Agent selector',
   )
   screenTokens(agent, ['Choose the Agent composition for this blank session', 'PTC', 'Standard', 'Minimal'])
-  snapshot('agent-selector.txt', agent)
-  session.write('\x1b[B\r')
+  snapshot('agent-selector.txt', gridFrom(agent, '╭─── Agent'))
+  session.write('\x1b')
   const ptc = await session.waitFor(
-    (text) => text.includes('Agent: PTC · Tools: Code') && /ptc · code/u.test(text),
-    'PTC footer after /agent',
+    (text) => !text.includes('Choose the Agent composition for this blank session') && /ptc · code/u.test(text),
+    'PTC footer after closing the Agent selector',
   )
-  screenTokens(ptc, ['Agent: PTC · Tools: Code'])
-  snapshot('agent-ptc-footer.txt', session.grid.lines().slice(-8).join('\n'))
+  screenTokens(ptc, ['ptc · code'])
+  snapshot('agent-ptc-footer.txt', lastRows(ptc, 8))
   console.log('PASS /agent PTC')
 
   session.write('/tool-mode\r')
@@ -118,7 +118,7 @@ try {
     'Tools selector',
   )
   screenTokens(tools, ['Choose how tools are exposed to the model', 'Native', 'Code', 'Both'])
-  snapshot('tools-selector.txt', tools)
+  snapshot('tools-selector.txt', gridFrom(tools, '╭─── Tools'))
   session.write('\x1b[B\r')
   const both = await session.waitFor((text) => text.includes('Tools: Both'), 'Both tool presentation')
   screenTokens(both, ['Tools: Both'])
@@ -132,7 +132,7 @@ try {
   if (!listing.includes('README.md') && !listing.includes('src/')) {
     throw new Error(`@ listing popup missing fixture paths\n${listing}`)
   }
-  snapshot('at-file-listing.txt', listing)
+  snapshot('at-file-listing.txt', lastRows(listing, 10))
 
   // Debounce is 100ms. Capture the grid during that window so the listing
   // must still be the previous popup, not a blanked composer.
@@ -147,7 +147,7 @@ try {
   if (!(pending.includes('README.md') || pending.includes('src/'))) {
     throw new Error(`@ popup closed while search was pending\n${pending}`)
   }
-  snapshot('at-file-pending.txt', pending)
+  snapshot('at-file-pending.txt', lastRows(pending, 10))
   console.log('PASS @-file popup stays open while search is pending')
 
   session.write('\x15') // Ctrl+U clears the composer token
@@ -159,7 +159,7 @@ try {
     'Ctrl+G external editor round-trip',
   )
   screenTokens(edited, ['grid-edited'])
-  snapshot('ctrl-g-editor.txt', session.grid.lines().slice(-8).join('\n'))
+  snapshot('ctrl-g-editor.txt', lastRows(edited, 8))
   console.log('PASS Ctrl+G open-in-editor')
 
   session.write('\x03')

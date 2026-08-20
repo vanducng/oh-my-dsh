@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { HeadlessGrid, gridDiff, normalizeGrid } from './tui-grid.mjs'
+import { HeadlessGrid, gridDiff, gridFrom, lastRows, normalizeGrid } from './tui-grid.mjs'
 
 test('HeadlessGrid applies CUP and ED so assertions see cells, not ANSI', async () => {
   const grid = new HeadlessGrid({ cols: 20, rows: 4 })
@@ -21,4 +21,10 @@ test('normalizeGrid replaces the longest run-specific paths first', () => {
 test('gridDiff marks only changed rows', () => {
   const diff = gridDiff('same\nold\n', 'same\nnew\n')
   assert.equal(diff, ' same\n-old\n+new')
+})
+
+test('gridFrom and lastRows keep snapshot regions stable', () => {
+  const text = 'header tips\n╭─── Agent\nPTC\nfooter'
+  assert.equal(gridFrom(text, '╭─── Agent'), '╭─── Agent\nPTC\nfooter')
+  assert.equal(lastRows(text, 2), 'PTC\nfooter')
 })
