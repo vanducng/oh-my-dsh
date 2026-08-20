@@ -18,6 +18,10 @@ test('normalizeGrid replaces the longest run-specific paths first', () => {
   )
 })
 
+test('normalizeGrid strips trailing spaces so snapshots pass git diff --check', () => {
+  assert.equal(normalizeGrid('ptc · code  \n0 steps  '), 'ptc · code\n0 steps')
+})
+
 test('gridDiff marks only changed rows', () => {
   const diff = gridDiff('same\nold\n', 'same\nnew\n')
   assert.equal(diff, ' same\n-old\n+new')

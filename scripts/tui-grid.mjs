@@ -93,7 +93,7 @@ export function normalizeGrid(text, replacements = {}) {
   for (const [token, value] of pairs) {
     next = next.split(value).join(token)
   }
-  return next
+  return next.split('\n').map((line) => line.replace(/[ \t]+$/u, '')).join('\n')
 }
 
 /** Unified-style line diff for snapshot mismatches. */

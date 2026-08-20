@@ -9,5 +9,5 @@
 │                                                                              │
 │ ↑↓ navigate · enter apply · esc cancel                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-  deepseek-v4-flash · high · ptc · code   $WORKSPACE · main  
-  Ctx 0% · 0/1M                                              0 turns · 0 steps  
+  deepseek-v4-flash · high · ptc · code   $WORKSPACE · main
+  Ctx 0% · 0/1M                                              0 turns · 0 steps
