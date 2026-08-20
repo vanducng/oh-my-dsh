@@ -9,7 +9,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockLlmServer } from '@deepseek-ai/dsh-llm-mock-server'
@@ -236,38 +236,22 @@ async function runDotfilesBoot() {
   const grokRe = /grok-4\.6|Grok 4\.6/u
   const asIs = spawnGridSession({ cwd: workspace, env: childEnv })
   let live = asIs
-  let isolatedObserve = false
   try {
     const asIsScreen = await asIs.waitFor(
-      (text) => grokRe.test(text) || text.includes('storageDomain') || text.includes('did not activate'),
-      'dotfiles as-is boot (grok-4.6 or storageDomain)',
+      (text) => text.includes('Into the Unknown') && text.includes('🐳') && grokRe.test(text),
+      'dotfiles as-is boot footer with grok-4.6',
       { timeout: 25_000 },
     )
-    if (grokRe.test(asIsScreen) && asIsScreen.includes('🐳')) {
-      console.log('PASS dotfiles as-is boot footer/model')
-    } else if (asIsScreen.includes('storageDomain') && asIsScreen.includes('dsh-observe')) {
-      console.log('AS_IS_BOOT_INCOMPATIBLE dsh-observe waiting for storageDomain')
-      asIs.dispose()
-      renameSync(join(home, 'omdsh/plugins.yml'), join(home, 'omdsh/plugins.yml.as-is'))
-      isolatedObserve = true
-      live = spawnGridSession({ cwd: workspace, env: childEnv })
-      const boot = await live.waitFor(
-        (text) => text.includes('Into the Unknown') && text.includes('🐳') && grokRe.test(text),
-        'dotfiles settings boot footer with grok-4.6',
-      )
-      if (!grokRe.test(boot)) {
-        throw new Error(`dotfiles footer missing grok-4.6\n${redactSecrets(lastRows(boot, 8))}`)
-      }
-      console.log('PASS dotfiles settings boot footer/model (plugins.yml isolated)')
-    } else {
-      throw new Error(`dotfiles as-is boot neither grok-4.6 nor storageDomain\n${redactSecrets(lastRows(asIsScreen, 12))}`)
+    if (!grokRe.test(asIsScreen) || !asIsScreen.includes('🐳')) {
+      throw new Error(`dotfiles as-is boot missing grok-4.6 with plugins.yml mounted\n${redactSecrets(lastRows(asIsScreen, 12))}`)
     }
+    console.log('PASS dotfiles as-is boot footer/model')
 
     const bootTrace = await recordDotfilesTrace({
       name: 'dotfiles-config-boot',
       ok: true,
       input: { paths: materialized.copied },
-      output: { boot: true, model: 'grok-4.6', isolatedObserve },
+      output: { boot: true, model: 'grok-4.6', pluginsYml: true },
     })
     if (!bootTrace.skipped) console.log(`TRACE dotfiles-config-boot id=${bootTrace.traceId}`)
 
@@ -297,7 +281,7 @@ async function runDotfilesBoot() {
         name: 'dotfiles-config-live-turn',
         ok: true,
         input: { model: 'grok-4.6', prompt: livePrompt },
-        output: { boot: true, liveTurn: true, isolatedObserve },
+        output: { boot: true, liveTurn: true, pluginsYml: true },
       })
       if (!traced.skipped) console.log(`TRACE dotfiles-config-live-turn id=${traced.traceId}`)
     } catch (error) {
@@ -307,7 +291,7 @@ async function runDotfilesBoot() {
         name: 'dotfiles-config-live-turn',
         ok: false,
         input: { model: 'grok-4.6', prompt: livePrompt },
-        output: { boot: true, liveTurn: 'failed', isolatedObserve },
+        output: { boot: true, liveTurn: 'failed', pluginsYml: true },
       })
     }
 

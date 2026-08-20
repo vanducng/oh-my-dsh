@@ -21,10 +21,10 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const appRoot = join(root, 'apps/omdsh')
-const TAGS = ['oh-my-dsh', 'pr-19', 'env=oh-my-dsh-eval']
+const TAGS = ['oh-my-dsh', 'eval']
 const EVAL_ENVIRONMENT = 'oh-my-dsh-eval'
 const PREFERRED_MODEL = 'grok-4.6'
-const SESSION_ID = `pr-19-${new Date().toISOString().slice(0, 19).replace(/[-:]/g, '')}`
+const SESSION_ID = `omdsh-eval-${new Date().toISOString().slice(0, 19).replace(/[-:]/g, '')}`
 const PACK_ENV_KEYS = [
   'PATH',
   'HOME',
@@ -187,7 +187,7 @@ async function finishScenario(scenario) {
       id: scenario.traceId,
       name: scenario.name,
       sessionId: SESSION_ID,
-      release: 'pr-19',
+      release: 'eval',
       version: '0.7.1',
       tags: TAGS,
       environment: EVAL_ENVIRONMENT,
@@ -195,7 +195,6 @@ async function finishScenario(scenario) {
         env: EVAL_ENVIRONMENT,
         scenario: scenario.name,
         repo: 'vanducng/oh-my-dsh',
-        branch: 'cursor/sync-upstream-f990',
       },
       input: scenario.input,
       output: scenario.output,

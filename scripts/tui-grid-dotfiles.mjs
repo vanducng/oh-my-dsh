@@ -172,9 +172,9 @@ export async function recordDotfilesTrace({ name, ok, input, output, env = proce
         body: {
           id: traceId,
           name,
-          sessionId: 'pr-19-dotfiles-config',
-          release: 'pr-19',
-          tags: ['oh-my-dsh', 'pr-19', 'dotfiles-config'],
+          sessionId: 'omdsh-eval-dotfiles',
+          release: 'eval',
+          tags: ['oh-my-dsh', 'eval', 'dotfiles-config'],
           environment: 'oh-my-dsh-eval',
           metadata: { env: 'oh-my-dsh-eval', scenario: name },
           input,
