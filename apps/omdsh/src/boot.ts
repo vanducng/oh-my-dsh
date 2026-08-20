@@ -1,23 +1,19 @@
 /**
- * omdsh tree boot: mounts the shipped cordis.yml composition through the
- * harness boot machinery, providing the command line, the exit request,
- * and the launch-environment snapshot before any entry mounts.
+ * omdsh tree boot: mounts the omdsh Profile over an empty root, providing
+ * the command line, the exit request, and the launch-environment snapshot
+ * before any entry mounts.
  * @module @vanducng/oh-my-dsh
  */
 
-import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
-import { boot, installFailLoud, loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
+import { boot, installFailLoud } from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
+import { NAME, prepareLaunchEnvironment } from './composition.ts'
+import { composeLaunch } from './profile.ts'
 import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.ts'
-import { loadMcpPatches } from './mcp-config.ts'
-import { loadUserPatches, userPluginsPatches } from './user-patches.ts'
 
-export const NAME = 'omdsh'
-
-/** Absolute path of the shipped composition (source and built layouts both sit one directory under apps/omdsh). */
-export const CONFIG_PATH = fileURLToPath(new URL('../config/cordis.yml', import.meta.url))
+export { NAME } from './composition.ts'
 
 /**
  * Boot the omdsh tree and leave process lifetime to the mounted runner.
@@ -41,8 +37,9 @@ export async function runOmdsh(
   process.on('SIGTERM', () => { interrupt(0) })
   process.on('SIGINT', () => { interrupt(130) })
   installFailLoud(NAME, process, async () => { await app.current?.fiber.dispose() })
-  const environment = loadLayeredEnv(NAME)
-  const ctx = await boot(NAME, CONFIG_PATH, [...loadMcpPatches(), ...userPluginsPatches(), ...loadUserPatches()], (hostCtx) => {
+  const environment = prepareLaunchEnvironment()
+  const composed = composeLaunch()
+  const ctx = await boot(NAME, composed.rootConfig, structuredClone(composed.patches), (hostCtx) => {
     app.current = hostCtx
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
     provideCmdline(hostCtx, {

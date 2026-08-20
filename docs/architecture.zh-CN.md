@@ -8,7 +8,7 @@ oh-my-dsh 是一个通过组合已发布 DeepSeek Harness 软件包构建的终�
 
 - **运行时：** `@deepseek-ai/*` 软件包以固定版本从 npm 安装，并通过其公开导出使用。
 - **产品：** `apps/omdsh` 负责 CLI 和运行时组合；`packages/tui/omdsh-tui` 负责可复用的终端插件套件。
-- **参考项目：** `refs/deepseek-harness` 和 `refs/oh-my-pi` 是只读的架构与交互设计参考，不参与依赖解析、构建、测试或运行时执行。
+- **参考项目：** `refs/deepseek-harness`、`refs/oh-my-pi` 和 `refs/pi` 是只读的架构与交互设计参考，不参与依赖解析、构建、测试或运行时执行。
 
 本项目刻意避免建立第二套 Agent Core。它将 Harness 能力适配到本地终端，而不重新实现这些能力的领域状态。
 
@@ -18,18 +18,18 @@ oh-my-dsh 是一个通过组合已发布 DeepSeek Harness 软件包构建的终�
 apps/omdsh/                         @vanducng/oh-my-dsh
 ├── src/bin.ts                      CLI 入口与参数处理
 ├── src/boot.ts                     启动 Harness 插件树
-└── config/cordis.yml               应用组合
+├── src/plugin.ts                   `omdsh plugin` Profile 安装器
+└── config/cordis.yml               产品 bundle insert
 
 packages/tui/omdsh-tui/            @vanducng/dsh-tui
+├── src/index.ts                    本地 Provider 插件入口
 ├── src/definition.ts               与 Provider 无关的 TUI Service
-├── src/provider-local.ts           终端 Provider 与 TTY 所有者
-├── src/session-runtime.ts          活跃 Agent 与会话生命周期
-├── src/human-interaction.ts        审批与提问适配器
-├── src/tool-presentation.ts        Harness 展示意图适配桥
-├── src/command-*.ts                命令贡献插件
-├── src/startup-notices.ts          版本与更新提示
-├── src/runner.ts                   交互式输入循环
-└── src/index.ts                    本地 Provider 插件入口
+├── src/runtime/                    终端 Provider、会话运行时、Runner、启动提示
+├── src/commands/                   斜杠命令贡献插件
+├── src/chrome/                     主题、Markdown、渲染、Status、工具卡片
+├── src/input/                      按键、编辑器、剪贴板、粘贴
+├── src/views/                      会话记录、浮层、搜索、复制
+└── src/session/                    会话控制器与 TUI 设置
 ```
 
 TUI 软件包从同一个 npm 软件包公开多个 Cordis 入口，因为它们共享依赖与发布周期。只有当一项能力具备独立复用、所有权、依赖或版本管理需求时，才值得拆成新的 npm 软件包。
@@ -39,28 +39,29 @@ TUI 软件包从同一个 npm 软件包公开多个 Cordis 入口，因为它们
 “一切皆插件”描述的是所有权，而不是文件数量。当一项能力拥有独立的生命周期、配置、依赖集合、注册协议、作用域或替换点时，它才应该成为插件。
 
 - 只有本地 Provider 负责 raw mode、按键解码、光标定位、viewport 状态和原子化终端写入。
-- `session-runtime` 负责创建 Agent、创建与恢复持久会话、替换活跃会话、选择模型、读取 Projection 和清理资源。
+- `session-runtime` 负责创建 Agent、创建与恢复持久会话、替换活跃会话、选择模型、挂载 Agent preset、设置每个 Agent 的工具展示、读取 Projection 和清理资源。
 - 命令插件通过 `dsh-commands` 注册元数据和处理器；Runner 不维护第二份命令注册表。
 - Loop 命令以独立插件负责进程内调度与 Footer Projection。重复 Prompt 仍通过 `session-runtime` 提交；Loop 状态不会写入持久会话历史，并在活跃 Agent 发生变化时丢弃。
 - 工具插件负责工具语义和与 Provider 无关的展示意图。TUI 将 `ToolDefinition.presentCall` 和 `presentResult` 映射为终端卡片，并保留通用回退展示。
 - Harness Projection 插件负责 token、上下文、耗时、标题和会话统计；状态栏只负责格式化这些输出。
+- `session-runtime` 把带 `origin: subagent` 的后代会话投影为 Composer 上方的实时名册，并可以把视口切换到其中一个孩子的 Transcript。可续写的孩子通过 `ctx.subagents.followup` 接收 Composer 的后续消息；一次性运行保持只读。子会话日志留在各自的 Session 中，不会回放到父 Transcript。
 - 人机交互适配器将审批和提问 Service 连接到终端选择器，而不把这些领域迁入终端 Provider。
 
 纯算法仍然保留为内部模块，包括 ANSI 解析、终端显示宽度、Markdown 格式化、编辑器移动、路径匹配、主题映射、帧差分、viewport 切片和 Overlay 状态转换。除非出现第二个拥有独立所有权的适配器并形成真实边界，否则不应将它们改造成运行时插件。
 
 ## 运行时组合
 
-[`apps/omdsh/config/cordis.yml`](../apps/omdsh/config/cordis.yml) 是应用 Profile 的权威来源，其中组合了：
+[`apps/omdsh/config/cordis.yml`](../apps/omdsh/config/cordis.yml) 是 `@vanducng/oh-my-dsh` 产品 bundle，叠在空的 `$OMDSH_HOME/profiles/omdsh` 根上，其中组合了：
 
 - Cordis Loader 与 Timer 基础设施；
-- DeepSeek LLM Adapter、默认休眠的 pi-ai 多 Provider Adapter、设置、凭据、默认模型和 Agent Runtime；
+- 官方 DeepSeek LLM Adapter、休眠挂载的 pi-ai 多提供方 Adapter、设置、凭据、默认模型、Agent preset roster、Code Runtime 和 Agent Runtime；
 - 持久化 JSONL 会话、Checkpoint、查询、标题、统计与 Token Projection；
 - 本地附件、文件系统、子进程、Bash、Sandbox 和权限 Provider；
-- Harness 命令、Compaction、Todo、Goal、Plan、审批、提问和 Subagent；
+- Standard、PTC、Minimal 与 Cordis 的 Agent-plane 组合，以及 Harness 命令、Compaction、Todo、Goal、Plan、审批、提问和 Subagent；
 - 文件系统 Skill 发现以及项目级和用户级 MCP Server Adapter；
 - 本地 TUI Provider、工具展示适配桥、Session Runtime、人机交互适配器、命令贡献插件、启动提示和 Runner。
 
-Skills、MCP 与树外插件的部署细节见 [`skills-and-mcp.zh-CN.md`](skills-and-mcp.zh-CN.md)。
+Skills 与 MCP 的部署细节见 [`skills-and-mcp.zh-CN.md`](skills-and-mcp.zh-CN.md)。`omdsh plugin add` 装入的用户 bundle、Profile 的 `cordis.patch.yml`、可选的 `$OMDSH_HOME/cordis.patch.yml`，以及本 fork 的 `$OMDSH_HOME/omdsh/plugins.yml` 与 `$OMDSH_HOME/omdsh/cordis.patch.yml` 会在启动时叠加在这棵 composition 之上；`omdsh --dump-config` 打印结果。[`examples/hello`](../examples/hello) 是可安装的编写样例。见 [`plugins.zh-CN.md`](plugins.zh-CN.md)。
 
 ## 数据与交互流
 
@@ -74,7 +75,7 @@ Skills、MCP 与树外插件的部署细节见 [`skills-and-mcp.zh-CN.md`](skill
   → 差分终端 Renderer
 ```
 
-普通消息通过 `session-runtime` 进入活跃 Agent。Slash Command 通过当前作用域内的 Harness Registry 执行。Session Event 是对话回放的持久化事实来源；Projection Service 提供派生状态，TUI 不维护重复计数。工具调用及其结果最终合并为一张卡片，并以 Input 和 Output 分区展示。
+普通消息通过 `session-runtime` 进入活跃 Agent。Slash Command 通过当前作用域内的 Harness Registry 执行。Agent preset 与工具展示会在 Agent 发布前完成组合，并写入日志以供重建；产生第一条 Prompt 后，模型可见组合会被锁定。Workflow 与 Access 仍是相互独立、由 Harness 拥有的会话状态。Session Event 是对话回放的持久化事实来源；Projection Service 提供派生状态，TUI 不维护重复计数。工具调用及其结果最终合并为一张卡片，并以 Input 和 Output 分区展示。后代 subagent 的活动从这些子会话折叠进 Composer 旁的名册。
 
 ## 终端保证
 
