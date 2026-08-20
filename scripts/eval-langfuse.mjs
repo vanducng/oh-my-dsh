@@ -151,8 +151,8 @@ if (hostKind !== 'us-cloud') {
   process.exit(1)
 }
 
-function traceUrl(traceId) {
-  return `${langfuseBase}/project/${projectId}/traces/${traceId}`
+function tracePath(traceId) {
+  return `/project/${projectId}/traces/${traceId}`
 }
 
 async function ingest(events) {
@@ -221,7 +221,7 @@ async function finishScenario(scenario) {
     )
   }
   await ingest(events)
-  console.log(`TRACE ${scenario.name} id=${scenario.traceId} url=${traceUrl(scenario.traceId)} ok=${scenario.ok}`)
+  console.log(`TRACE ${scenario.name} id=${scenario.traceId} path=${tracePath(scenario.traceId)} ok=${scenario.ok}`)
   return scenario
 }
 
@@ -561,6 +561,6 @@ const completionModel = modelIds.includes(PREFERRED_MODEL)
 const failed = scenarios.filter((row) => !row.ok)
 console.log(`EVAL_SUMMARY session=${SESSION_ID} traces=${scenarios.length} passed=${scenarios.length - failed.length} failed=${failed.length}`)
 for (const row of scenarios) {
-  console.log(`- ${row.name} ${row.ok ? 'PASS' : 'FAIL'} ${traceUrl(row.traceId)}`)
+  console.log(`- ${row.name} ${row.ok ? 'PASS' : 'FAIL'} ${tracePath(row.traceId)}`)
 }
 process.exit(failed.length === 0 ? 0 : 1)
