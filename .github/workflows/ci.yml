@@ -55,6 +55,9 @@ jobs:
       - name: Happy-path smoke
         run: pnpm smoke:happy
 
+      - name: TUI grid smoke
+        run: pnpm smoke:tui
+
       - name: Test packed CLI
         run: pnpm test:package
 

@@ -97,6 +97,7 @@ pnpm test                # unit and pipe-mode tests
 pnpm build               # build all workspace packages
 pnpm smoke               # interactive PTY smoke test
 pnpm smoke:happy         # mock-LLM happy path
+pnpm smoke:tui           # 80x30 VT grid smoke test
 ```
 
 The checkouts in `refs/deepseek-harness`, `refs/oh-my-pi`, and `refs/pi` are read-only references. Do not use them as runtime dependencies or modify them while developing omdsh.

@@ -98,6 +98,7 @@ New contribution registries for themes, status segments, overlays, or key action
 - Runtime tests cover command registration, session creation and recovery, queueing, projections, model and permission selection, human interaction, and disposal.
 - `pnpm smoke:happy` boots the complete composition against the published Harness mock LLM path.
 - `pnpm smoke` exercises the built command through a real PTY for raw input, rendering, interruption, and exit behavior.
+- `pnpm smoke:tui` feeds that PTY into `@xterm/headless` and asserts the rendered 80x30 cell grid for boot/status, `/agent`, the `@`-file popup, and Ctrl+G.
 - Dependency-boundary checks require published npm packages, clean reference submodules, and no links or aliases into `refs/`.
 
 The exact commands required for a change are defined in [`AGENTS.md`](../AGENTS.md).
