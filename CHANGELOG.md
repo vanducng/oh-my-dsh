@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.8.0](https://github.com/vanducng/oh-my-dsh/compare/v0.7.1...v0.8.0) (2026-08-20)
+
+
+### Features
+
+* add upstream session and plugin workflows ([f21a3ee](https://github.com/vanducng/oh-my-dsh/commit/f21a3ee5ff50cafa9900511a41e68fc63252ef27))
+
 ## [0.7.1](https://github.com/vanducng/oh-my-dsh/compare/v0.7.0...v0.7.1) (2026-08-19)
 
 
