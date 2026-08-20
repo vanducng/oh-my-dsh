@@ -264,6 +264,18 @@ export interface TuiService {
    * @returns disposer removing the listener.
    */
   onInspectSubmit(listener: (submission: TuiSubmission) => void): () => void
+  /** Replace the optional `@` session candidate source used by composer completion. */
+  setSessionSearch(search?: (
+    query: string,
+    signal?: AbortSignal,
+  ) => Promise<readonly { sessionId: string; label: string; cwd?: string }[]>): void
+  /** Replace the optional `@` file candidate source used by composer completion. */
+  setFileSearch(search?: (
+    query: string,
+    signal?: AbortSignal,
+  ) => Promise<readonly { path: string; kind: 'file' | 'directory' }[]>): void
+  /** Replace the optional Harness image-admission check applied when a paste drafts an image. */
+  setImageValidator(validate?: (image: TuiInputImage) => Promise<void>): void
   /** Restore terminal state and settle a pending input read with null. */
   dispose(): void
 }

@@ -46,6 +46,7 @@ import {
 import {
   applyPathCompletion,
   defaultPathSource,
+  editorLineAt,
   findPathToken,
   parsePathPrefix,
   pathSuggestions,
@@ -53,6 +54,13 @@ import {
   type DirReader,
   type PathSearcher,
 } from '../views/path-complete.ts'
+import { activeAtToken } from '@deepseek-ai/dsh-file-reference/grammar'
+import {
+  nextSelectableAutocompleteIndex,
+  searchAtSuggestions,
+  type FileSearcher,
+  type SessionSearcher,
+} from '../views/at-complete.ts'
 import { copyToClipboard, readFromClipboard, type ClipboardReader, type ClipboardWriter } from '../input/clipboard.ts'
 import {
   applyCopySelectorEvent,
@@ -118,6 +126,7 @@ import {
   imageMarker,
   imagePathCandidates,
   probeImageDimensions,
+  stripComposerImageMarkers,
   readImageFile,
   readImageFromClipboard,
   readMacClipboardFiles,
@@ -277,6 +286,9 @@ export class LocalTui implements TuiService {
   readonly #home: string
   readonly #listDir: DirReader
   readonly #searchFiles: PathSearcher
+  #searchFileMentions: FileSearcher | undefined
+  #searchSessions: SessionSearcher | undefined
+  #validateImageDraft: ((image: TuiInputImage) => Promise<void>) | undefined
   readonly #autocompleteDebounceMs: number
   #persistPrefs: ((prefs: TuiPrefs) => void) | null = null
 
@@ -300,6 +312,8 @@ export class LocalTui implements TuiService {
       home?: string
       listDir?: DirReader
       searchFiles?: PathSearcher
+      searchFileMentions?: FileSearcher
+      searchSessions?: SessionSearcher
       autocompleteDebounceMs?: number
       historyPath?: string
       keybindingsPath?: string
@@ -328,6 +342,8 @@ export class LocalTui implements TuiService {
     this.#home = paths.home ?? fallback.home
     this.#listDir = paths.listDir ?? fallback.listDir
     this.#searchFiles = paths.searchFiles ?? fallback.searchFiles
+    this.#searchFileMentions = paths.searchFileMentions
+    this.#searchSessions = paths.searchSessions
     this.#autocompleteDebounceMs = Math.max(0, paths.autocompleteDebounceMs ?? 100)
     this.#welcomeTips = pickWelcomeTips()
     this.#trueColor = colors && detectTrueColor()
@@ -429,6 +445,22 @@ export class LocalTui implements TuiService {
     }))
     this.#refreshAutocomplete()
     if (this.#tty) this.#render()
+  }
+
+  setSessionSearch(search?: SessionSearcher): void {
+    this.#searchSessions = search
+    this.#refreshAutocomplete()
+    if (this.#tty) this.#render()
+  }
+
+  setFileSearch(search?: FileSearcher): void {
+    this.#searchFileMentions = search
+    this.#refreshAutocomplete()
+    if (this.#tty) this.#render()
+  }
+
+  setImageValidator(validate?: (image: TuiInputImage) => Promise<void>): void {
+    this.#validateImageDraft = validate
   }
 
   notice(text: string, options: TuiNoticeOptions = {}): void {
@@ -921,9 +953,17 @@ export class LocalTui implements TuiService {
     if (paths.length > 0) {
       const images = await Promise.all(paths.map(path => this.#readImagePath(path)))
       if (images.every((image): image is TuiInputImage => image !== null)) {
-        for (const image of images) this.#insertImageDraft(image)
-        this.#refreshAutocomplete()
-        this.#render()
+        let inserted = false
+        for (const image of images) {
+          if (await this.#admitImage(image)) {
+            this.#insertImageDraft(image)
+            inserted = true
+          }
+        }
+        if (inserted) {
+          this.#refreshAutocomplete()
+          this.#render()
+        }
         return
       }
       // Screenshot tools sometimes paste a transient cache path and remove
@@ -946,9 +986,11 @@ export class LocalTui implements TuiService {
     if (this.#search === null && this.#settings === null && this.#copySelector === null) {
       const image = await this.#readClipboardImage()
       if (image !== null) {
-        this.#insertImageDraft(image)
-        this.#refreshAutocomplete()
-        this.#render()
+        if (await this.#admitImage(image)) {
+          this.#insertImageDraft(image)
+          this.#refreshAutocomplete()
+          this.#render()
+        }
         return
       }
       const files = await this.#readClipboardFiles()
@@ -957,15 +999,39 @@ export class LocalTui implements TuiService {
         const images = (await Promise.all(imagePaths.map(path => this.#readImagePath(path))))
           .filter((candidate): candidate is TuiInputImage => candidate !== null)
         if (images.length > 0) {
-          for (const candidate of images) this.#insertImageDraft(candidate)
-          this.#refreshAutocomplete()
-          this.#render()
+          let inserted = false
+          for (const candidate of images) {
+            if (await this.#admitImage(candidate)) {
+              this.#insertImageDraft(candidate)
+              inserted = true
+            }
+          }
+          if (inserted) {
+            this.#refreshAutocomplete()
+            this.#render()
+          }
           return
         }
       }
     }
     const text = await this.#readClipboard()
     if (text !== '') await this.#acceptPastedText(text)
+  }
+
+  /**
+   * Run the Harness image-admission check for one paste candidate. A refusal
+   * becomes an error notice and skips the draft, instead of failing the whole
+   * submission after the user has typed a prompt around it.
+   */
+  async #admitImage(image: TuiInputImage): Promise<boolean> {
+    if (this.#validateImageDraft === undefined) return true
+    try {
+      await this.#validateImageDraft(image)
+      return true
+    } catch (error: unknown) {
+      this.notice(error instanceof Error ? error.message : String(error), { level: 'error' })
+      return false
+    }
   }
 
   #insertImageDraft(input: TuiInputImage): void {
@@ -1491,7 +1557,7 @@ export class LocalTui implements TuiService {
     }
     if (hit.kind === 'autocomplete' && this.#ac !== null) {
       const index = hitTestAutocomplete(this.#ac.items.length, this.#ac.selected, localRow)
-      if (index === undefined) return true
+      if (index === undefined || this.#ac.items[index]?.kind === 'heading') return true
       this.#ac = { ...this.#ac, selected: index }
       this.#applySelectedCompletion()
       this.#render()
@@ -1698,15 +1764,27 @@ export class LocalTui implements TuiService {
       force: forcePath,
     }
     const token = findPathToken(this.#editor.text, this.#editor.cursor, forcePath)
-    const atPrefix = token?.kind === 'at' ? parsePathPrefix(token.prefix).raw.replaceAll('\\', '/') : ''
-    const fuzzyAt = token?.kind === 'at' && atPrefix !== '' && !atPrefix.endsWith('/')
-    if (fuzzyAt) {
-      // Keep the previous path popup visible while the async search is in
-      // flight (oh-my-pi behavior): blanking it on every keystroke makes the
-      // bottom-anchored composer bounce up and down until the result lands.
+    const { line, col } = editorLineAt(this.#editor.text, this.#editor.cursor)
+    const at = forcePath ? undefined : activeAtToken(line, col)
+    const atPrefix = at?.query.replaceAll('\\', '/')
+      ?? (token?.kind === 'at' ? parsePathPrefix(token.prefix).raw.replaceAll('\\', '/') : '')
+    const fuzzyAt = (at !== undefined || token?.kind === 'at') && atPrefix !== '' && !atPrefix.endsWith('/')
+    const harnessAt = at !== undefined
+      && (this.#searchFileMentions !== undefined || this.#searchSessions !== undefined)
+    if (fuzzyAt || harnessAt) {
+      // Keep the previous path/session popup visible while the async search
+      // is in flight (oh-my-pi behavior): blanking it on every keystroke
+      // makes the bottom-anchored composer bounce until the result lands.
       // A popup of a different category (slash command) cannot stay relevant
-      // for an `@` token and is cleared immediately.
-      if (this.#ac !== null && this.#ac.items[0]?.kind !== 'path') this.#ac = null
+      // for an `@` token and is cleared immediately. Skip heading rows when
+      // classifying so harness "Files & folders" / "Session conversations"
+      // menus do not bounce.
+      if (harnessAt && !fuzzyAt) {
+        this.#setAutocomplete(pathSuggestions(this.#editor.text, this.#editor.cursor, pathOptions, commands))
+      } else {
+        const liveKind = this.#ac?.items.find(item => item.kind !== 'heading')?.kind
+        if (this.#ac !== null && liveKind !== 'path' && liveKind !== 'session') this.#ac = null
+      }
       const text = this.#editor.text
       const cursor = this.#editor.cursor
       this.#autocompleteTimer = setTimeout(() => {
@@ -1714,11 +1792,20 @@ export class LocalTui implements TuiService {
         if (this.#disposed || requestId !== this.#autocompleteRequestId) return
         const controller = new AbortController()
         this.#autocompleteAbort = controller
-        void searchPathSuggestions(text, cursor, {
-          ...pathOptions,
-          searchFiles: this.#searchFiles,
-          signal: controller.signal,
-        }, commands).then((result) => {
+        const search = this.#searchFileMentions === undefined && this.#searchSessions === undefined
+          ? searchPathSuggestions(text, cursor, {
+            ...pathOptions,
+            searchFiles: this.#searchFiles,
+            signal: controller.signal,
+          }, commands)
+          : searchAtSuggestions(text, cursor, {
+            ...pathOptions,
+            searchFiles: this.#searchFiles,
+            ...(this.#searchFileMentions === undefined ? {} : { searchFileMentions: this.#searchFileMentions }),
+            ...(this.#searchSessions === undefined ? {} : { searchSessions: this.#searchSessions }),
+            signal: controller.signal,
+          }, commands)
+        void search.then((result) => {
           if (this.#disposed || controller.signal.aborted || requestId !== this.#autocompleteRequestId) return
           this.#autocompleteAbort = null
           this.#setAutocomplete(result)
@@ -1742,9 +1829,9 @@ export class LocalTui implements TuiService {
       return
     }
     const prev = this.#ac?.items[this.#ac.selected]?.value
-    let selected = 0
+    let selected = nextSelectableAutocompleteIndex(result.items, 0, 1)
     if (prev !== undefined) {
-      const idx = result.items.findIndex((item) => item.value === prev)
+      const idx = result.items.findIndex((item) => item.value === prev && item.kind !== 'heading')
       if (idx >= 0) selected = idx
     }
     this.#ac = { items: result.items, selected, prefix: result.prefix }
@@ -1752,8 +1839,10 @@ export class LocalTui implements TuiService {
 
   #moveAutocomplete(dir: -1 | 1): void {
     if (this.#ac === null || this.#ac.items.length === 0) return
-    const n = this.#ac.items.length
-    this.#ac = { ...this.#ac, selected: (this.#ac.selected + dir + n) % n }
+    this.#ac = {
+      ...this.#ac,
+      selected: nextSelectableAutocompleteIndex(this.#ac.items, this.#ac.selected + dir, dir),
+    }
   }
 
   /**
@@ -1766,7 +1855,7 @@ export class LocalTui implements TuiService {
    */
   #autocompletePrefixMatches(prefix: string, item: AutocompleteItem): boolean {
     const { text, cursor } = this.#editor
-    if (item.kind === 'path') {
+    if (item.kind === 'path' || item.kind === 'session') {
       const token = findPathToken(text, cursor, true)
       if (token === null) return false
       return text.slice(token.start, cursor) === prefix
@@ -1777,9 +1866,9 @@ export class LocalTui implements TuiService {
   #applySelectedCompletion(): boolean {
     const ac = this.#ac
     const item = ac?.items[ac.selected]
-    if (ac === null || item === undefined) return false
+    if (ac === null || item === undefined || item.kind === 'heading') return false
     if (!this.#autocompletePrefixMatches(ac.prefix, item)) return false
-    const next = item.kind === 'path'
+    const next = item.kind === 'path' || item.kind === 'session'
       ? applyPathCompletion(this.#editor.text, this.#editor.cursor, item)
       : applySlashCompletion(this.#editor.text, this.#editor.cursor, item)
     this.#editor.setText(next.text, next.cursor)
@@ -1918,7 +2007,7 @@ export class LocalTui implements TuiService {
     const images = this.#images.map(image => ({ ...image }))
     const submittedText = images.length > 0 ? text.trim() : text
     const queueEditNewer = this.#queueEditNewer
-    const historyText = images.reduce((value, image, index) => value.replaceAll(imageMarker(index, image), ''), submittedText)
+    const historyText = stripComposerImageMarkers(submittedText, images)
       .replace(/[ \t]{2,}/gu, ' ')
       .trim()
     if (historyText !== '' && this.#history[this.#history.length - 1] !== historyText) {
@@ -1936,6 +2025,9 @@ export class LocalTui implements TuiService {
     this.#settings = null
     this.#copySelector = null
     this.#followTail()
+    // Image placeholders are TUI-owned. Mixed image+slash drafts stay a
+    // submission so restore can keep the original markers; the runner strips
+    // them only to detect and execute Harness commands.
     const slash = images.length === 0 ? parseSlashInput(submittedText) : null
     if (slash !== null) {
       if (queueEditNewer !== null) this.#queuedSubmissions.push(...queueEditNewer)
@@ -1959,7 +2051,7 @@ export class LocalTui implements TuiService {
   #submitInspect(text: string): void {
     const images = this.#images.map(image => ({ ...image }))
     const submittedText = images.length > 0 ? text.trim() : text
-    const historyText = images.reduce((value, image, index) => value.replaceAll(imageMarker(index, image), ''), submittedText)
+    const historyText = stripComposerImageMarkers(submittedText, images)
       .replace(/[ \t]{2,}/gu, ' ')
       .trim()
     if (historyText !== '' && this.#history[this.#history.length - 1] !== historyText) {

@@ -36,7 +36,7 @@
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
-    "@deepseek-ai/dsh-llm-mock-server": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm-mock-server": "0.1.0-rc.8",
     "@types/node": "^22.10.0",
     "@xterm/headless": "6.0.0",
     "lefthook": "2.1.10",

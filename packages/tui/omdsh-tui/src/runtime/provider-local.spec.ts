@@ -10,7 +10,8 @@ import { homedir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { formatSessionReferenceMention } from '@deepseek-ai/dsh-session-reference'
 import { copyToClipboard } from '../input/clipboard.ts'
 import { LocalTui, type TerminalLike } from './provider-local.ts'
 import { initialTranscript, renderView } from '../views/event-views.ts'
@@ -777,6 +778,42 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
+  it('refuses a pasted image that fails Harness admission, with an error notice', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      readClipboardImage: async () => ({ data: PNG_1X1, mediaType: 'image/png', name: 'huge.png' }),
+    })
+    tui.setImageValidator(async () => { throw new Error('image exceeds the 2000px dimension limit') })
+    const pending = tui.readInput()
+
+    press(term, '\x16')
+    await flushAsyncPaste()
+    await flushAsyncPaste()
+    expect(stripAnsi(term.captured)).toContain('image exceeds the 2000px dimension limit')
+    expect(stripAnsi(term.captured)).not.toContain('[Image #1')
+
+    press(term, 'just text\r')
+    await expect(pending).resolves.toEqual({ text: 'just text', images: [] })
+    tui.dispose()
+  })
+
+  it('drafts a pasted image that passes Harness admission', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      readClipboardImage: async () => ({ data: PNG_1X1, mediaType: 'image/png', name: 'clipboard.png' }),
+    })
+    tui.setImageValidator(async () => {})
+    const pending = tui.readInput()
+
+    press(term, '\x16')
+    await flushAsyncPaste()
+    await flushAsyncPaste()
+    expect(stripAnsi(term.captured)).toContain('[Image #1, 1x1]')
+    press(term, '\r')
+    await expect(pending).resolves.toMatchObject({ text: '[Image #1, 1x1]' })
+    tui.dispose()
+  })
+
   it('queues Enter behind an asynchronous image paste', async () => {
     const term = new FakeTerminal()
     let resolveImage: ((image: { data: Uint8Array; mediaType: 'image/png' }) => void) | undefined
@@ -815,6 +852,94 @@ describe('LocalTui (tty)', () => {
       text: '[Image #1, 1x1]\n[Image #2, 1x1]',
       images: [{ mediaType: 'image/png' }, { mediaType: 'image/png' }],
     })
+    tui.dispose()
+  })
+
+  it('keeps the original image draft when a slash command is typed after a paste', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      readClipboardImage: async () => ({ data: PNG_1X1, mediaType: 'image/png' }),
+    })
+    const pending = tui.readInput()
+    press(term, '\x16')
+    await flushAsyncPaste()
+    press(term, '/goal implement auth\r')
+    const submitted = await pending
+    expect(submitted).toMatchObject({
+      text: '[Image #1, 1x1] /goal implement auth',
+      images: [{ mediaType: 'image/png' }],
+    })
+    tui.restoreInput(submitted as NonNullable<typeof submitted>)
+    const restored = tui.readInput()
+    press(term, '\r')
+    await expect(restored).resolves.toMatchObject({
+      text: '[Image #1, 1x1] /goal implement auth',
+      images: [{ mediaType: 'image/png' }],
+    })
+    tui.dispose()
+  })
+
+  it('keeps the original image draft when a slash command is typed before a paste', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      readClipboardImage: async () => ({ data: PNG_1X1, mediaType: 'image/png' }),
+    })
+    const pending = tui.readInput()
+    press(term, '/plan the migration')
+    press(term, '\x16')
+    await flushAsyncPaste()
+    press(term, '\r')
+    await expect(pending).resolves.toMatchObject({
+      text: '/plan the migration [Image #1, 1x1]',
+      images: [{ mediaType: 'image/png' }],
+    })
+    tui.dispose()
+  })
+
+  it('keeps the original image draft when a paste lands inside a slash command', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      readClipboardImage: async () => ({ data: PNG_1X1, mediaType: 'image/png' }),
+    })
+    const pending = tui.readInput()
+    press(term, '/goal ')
+    press(term, '\x16')
+    await flushAsyncPaste()
+    press(term, 'implement auth\r')
+    await expect(pending).resolves.toMatchObject({
+      text: '/goal [Image #1, 1x1] implement auth',
+      images: [{ mediaType: 'image/png' }],
+    })
+    tui.dispose()
+  })
+
+  it('recalls handwritten image placeholders from history when nothing is attached', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    const first = tui.readline()
+    press(term, '[Image #1] /goal literal\r')
+    await first
+    void tui.readline()
+    press(term, '\x1b[A')
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain('[Image #1] /goal literal')
+    tui.dispose()
+  })
+
+  it('drops attached image markers from history but keeps handwritten ones', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      readClipboardImage: async () => ({ data: PNG_1X1, mediaType: 'image/png' }),
+    })
+    const pending = tui.readInput()
+    press(term, '\x16')
+    await flushAsyncPaste()
+    press(term, 'see [Image #2] notes\r')
+    await pending
+    void tui.readInput()
+    press(term, '\x1b[A')
+    const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
+    expect(screen).toContain('[Image #2] notes')
+    expect(screen).not.toContain('[Image #1, 1x1]')
     tui.dispose()
   })
 
@@ -906,6 +1031,49 @@ describe('LocalTui (tty)', () => {
     expect(term.captured).toContain('index.ts')
     press(term, '\t')
     expect(term.captured).toContain('@src/index.ts ')
+    tui.dispose()
+  })
+
+  it('lists session mentions under the @ menu when a session searcher is injected', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      cwd: '/proj',
+      home: '/home/me',
+      listDir: () => [{ name: 'README.md', directory: false }],
+      autocompleteDebounceMs: 0,
+      searchSessions: async () => [{ sessionId: 'session-a', label: 'Research notes' }],
+    })
+    press(term, '@')
+    await new Promise(resolve => { setTimeout(resolve, 10) })
+    expect(stripAnsi(term.captured)).toContain('Files & folders')
+    expect(stripAnsi(term.captured)).toContain('Session conversations')
+    expect(stripAnsi(term.captured)).toContain('Research notes')
+    press(term, '\x1b[B\t')
+    expect(stripAnsi(term.captured)).toContain(formatSessionReferenceMention({
+      sessionId: SessionId('session-a'),
+      label: 'Research notes',
+    }))
+    tui.dispose()
+  })
+
+  it('lists file-reference candidates in the @ menu', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      cwd: '/proj',
+      home: '/home/me',
+      listDir: () => [],
+      autocompleteDebounceMs: 0,
+      searchFileMentions: async () => [
+        { path: 'README.md', kind: 'file' },
+        { path: 'src', kind: 'directory' },
+      ],
+    })
+    press(term, '@')
+    await new Promise(resolve => { setTimeout(resolve, 10) })
+    expect(stripAnsi(term.captured)).toContain('README.md')
+    expect(stripAnsi(term.captured)).toContain('src/')
+    press(term, '\t')
+    expect(stripAnsi(term.captured)).toContain('@README.md')
     tui.dispose()
   })
 
