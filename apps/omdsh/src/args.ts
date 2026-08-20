@@ -1,6 +1,6 @@
 /**
- * omdsh argument parsing: one optional prompt (positional words joined)
- * plus --model/--provider overrides, durable --resume, and help/version.
+ * omdsh argument parsing: one optional prompt, --model/--provider
+ * overrides, durable --resume, --dump-config, `omdsh plugin`, and help/version.
  * @module @vanducng/oh-my-dsh
  */
 
@@ -13,6 +13,12 @@ export interface OmdshInvocation {
   provider: string | undefined
   /** Durable session selected by --resume/-r. */
   resume: string | undefined
+  /** Print the composed plugin tree and exit. */
+  dumpConfig: boolean
+  /** `omdsh plugin` forwarded the remaining arguments to pnpm. */
+  plugin: boolean
+  /** pnpm arguments after `omdsh plugin`. */
+  pluginArgs: string[]
   /** --help requested. */
   help: boolean
 }
@@ -22,11 +28,15 @@ omdsh — a TUI coding agent on the DeepSeek Harness runtime
 
 Usage:
   omdsh [options] [prompt...]
+  omdsh plugin add <package>
+  omdsh plugin remove <package>
+  omdsh plugin <pnpm-args...>
 
 Options:
   --model <name>      model route (default deepseek-v4-flash)
   --provider <name>   provider route (default deepseek-official)
   -r, --resume <id>   resume a durable session
+  --dump-config       print the composed plugin tree and exit
   -h, --help          show this help
   --version           show the version
 
@@ -41,15 +51,30 @@ Environment:
  * @returns the invocation, or prints help/version and exits.
  */
 export function parseOmdshArgs(argv: readonly string[], version: string): OmdshInvocation {
+  if (argv[0] === 'plugin') {
+    return {
+      prompt: [],
+      model: undefined,
+      provider: undefined,
+      resume: undefined,
+      dumpConfig: false,
+      plugin: true,
+      pluginArgs: argv.slice(1).map(String),
+      help: false,
+    }
+  }
   const prompt: string[] = []
   let model: string | undefined
   let provider: string | undefined
   let resume: string | undefined
+  let dumpConfig = false
   let help = false
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? ''
     if (arg === '-h' || arg === '--help') {
       help = true
+    } else if (arg === '--dump-config') {
+      dumpConfig = true
     } else if (arg === '--version') {
       console.log(version)
       process.exit(0)
@@ -76,7 +101,10 @@ export function parseOmdshArgs(argv: readonly string[], version: string): OmdshI
     process.exit(0)
   }
   if (resume !== undefined && prompt.length > 0) usageError('--resume cannot be combined with a prompt')
-  return { prompt, model, provider, resume, help }
+  if (dumpConfig && (resume !== undefined || prompt.length > 0)) {
+    usageError('--dump-config cannot be combined with a prompt or --resume')
+  }
+  return { prompt, model, provider, resume, dumpConfig, plugin: false, pluginArgs: [], help }
 }
 
 function usageError(message: string): never {

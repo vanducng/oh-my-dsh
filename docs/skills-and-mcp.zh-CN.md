@@ -76,7 +76,9 @@ omdsh 按以下顺序读取 MCP 配置：
 
 ## 插件
 
-Harness Home 的 omdsh 命名空间（`$OMDSH_HOME/omdsh`，若未设置则依次使用 `$DSH_HOME/omdsh` 和 `~/.dsh/omdsh`）中的两个可选文件，在出厂组合之上扩展树外 DeepSeek Harness 插件：
+用 `omdsh plugin add` 安装已发布的 DeepSeek Harness bundle。该命令把它们写入 omdsh Profile（`$OMDSH_HOME/profiles/omdsh`）；这些用户 bundle 和 Profile 的 `cordis.patch.yml` 会叠加在出厂产品组合之上。见 [`plugins.zh-CN.md`](plugins.zh-CN.md)。
+
+本 fork 还会在 MCP 之后挂载 Harness Home 的 omdsh 命名空间（`$OMDSH_HOME/omdsh`，若未设置则依次使用 `$DSH_HOME/omdsh` 和 `~/.dsh/omdsh`）中的两个可选文件：
 
 1. `plugins.yml` — 一份额外插件行的 YAML 条目列表。它通过独立的 include 挂载，因此裸包名会在该文件旁解析：用普通包管理器把包安装到 `~/.dsh/omdsh/node_modules` 即可。
 2. `cordis.patch.yml` — 一份补丁列表，在出厂组合和 MCP 行之后应用：按 id 定向的配置覆盖、禁用与插入列表，允许 `!!js` 表达式。
@@ -97,8 +99,6 @@ npm install dsh-observe
     langfuse: !!js "process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY ? { baseUrl: process.env.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com', publicKey: process.env.LANGFUSE_PUBLIC_KEY, secretKey: process.env.LANGFUSE_SECRET_KEY } : null"
 ```
 
-一行挂载一个插件及其配置。出厂组合已提供 storage 设施（`storage`、`storage-json`、`storage-domain`），dsh-observe 等插件的持久缓冲会直接使用它；如果插件依赖出厂组合之外的服务，其自身文档会给出对应的行。这两个文件都会响亮地失败：存在但无法解析或挂载的文件会中止启动，而不是静默跳过该层。
-
-行格式目前是过渡方案：后续版本预计会采用上游的 profile 与 bundle 契约（`dsh plugin add`），届时声明了 `dsh.bundle` 清单的插件将不再需要手写行。
+一行挂载一个插件及其配置。出厂产品 bundle 已提供 storage 设施（`storage`、`storage-json`、`storage-domain`），dsh-observe 等插件的持久缓冲会直接使用它；如果插件依赖该 bundle 之外的服务，其自身文档会给出对应的行。这两个文件都会响亮地失败：存在但无法解析或挂载的文件会中止启动，而不是静默跳过该层。
 
 插件与 omdsh 本身拥有相同的权限 — 它可以读取文件、使用凭据并访问网络。安装前请检查源码，就像对待 MCP Server 一样。

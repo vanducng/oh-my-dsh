@@ -76,7 +76,9 @@ Discovered tools use `mcp__<server>__<tool>` names and enter the normal Harness 
 
 ## Plugins
 
-Two optional files in the omdsh namespace of the Harness home (`$OMDSH_HOME/omdsh`, or `$DSH_HOME/omdsh`, then `~/.dsh/omdsh`) extend the shipped composition with out-of-tree DeepSeek Harness plugins:
+Install published DeepSeek Harness bundles with `omdsh plugin add`. That command writes them into the omdsh Profile (`$OMDSH_HOME/profiles/omdsh`); those user bundles and the Profile `cordis.patch.yml` overlay the shipped product composition. See [`plugins.md`](plugins.md).
+
+This fork also mounts two optional files from the omdsh namespace of the Harness home (`$OMDSH_HOME/omdsh`, or `$DSH_HOME/omdsh`, then `~/.dsh/omdsh`) after MCP:
 
 1. `plugins.yml` — a YAML entry list of extra plugin rows. It is mounted through its own include, so bare package names resolve beside the file: install packages into `~/.dsh/omdsh/node_modules` with a normal package manager.
 2. `cordis.patch.yml` — a patch list applied after the shipped composition and the MCP rows: id-targeted config overrides, disables, and insert lists, with `!!js` expressions allowed.
@@ -97,8 +99,6 @@ npm install dsh-observe
     langfuse: !!js "process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY ? { baseUrl: process.env.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com', publicKey: process.env.LANGFUSE_PUBLIC_KEY, secretKey: process.env.LANGFUSE_SECRET_KEY } : null"
 ```
 
-A row mounts one plugin with its config. The base composition already provides the storage facility (`storage`, `storage-json`, `storage-domain`) that plugins such as dsh-observe use for durable buffers; a plugin that requires services beyond the base composition documents its own rows. Both files fail loud: a present file that cannot parse or mount aborts startup instead of silently skipping the layer.
-
-The row format is provisional: a later release is expected to adopt the upstream profile and bundle contract (`dsh plugin add`), which replaces hand-written rows for plugins that ship a `dsh.bundle` manifest.
+A row mounts one plugin with its config. The shipped product bundle provides the storage facility (`storage`, `storage-json`, `storage-domain`) that plugins such as dsh-observe use for durable buffers; a plugin that requires services beyond that bundle documents its own rows. Both files fail loud: a present file that cannot parse or mount aborts startup instead of silently skipping the layer.
 
 A plugin runs with the same permissions as omdsh itself — it can read files, use credentials, and reach the network. Review the source before installing, exactly as you would for an MCP server.

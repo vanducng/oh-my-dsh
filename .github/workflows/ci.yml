@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -12,6 +17,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +25,9 @@ jobs:
     steps:
       - name: Checkout (v7.0.1)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node (v7.0.0)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -46,5 +55,30 @@ jobs:
       - name: Happy-path smoke
         run: pnpm smoke:happy
 
+      # Keyless PTY path: scripts/pty-smoke.mjs uses a fake DEEPSEEK_API_KEY and
+      # node-pty (same runner capability as smoke:tui). Built mode matches the
+      # documented "exercises the built command" contract after the Build step.
+      # Covers double Ctrl-C, /access, rewind, and the resume hint.
+      - name: PTY smoke
+        run: pnpm smoke
+        env:
+          OMDSH_RUN_MODE: built
+
+      - name: TUI grid smoke
+        run: pnpm smoke:tui
+
       - name: Test packed CLI
         run: pnpm test:package
+
+      - name: Check dependency boundaries
+        run: pnpm check:boundaries
+
+      - name: Check whitespace
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            git diff --check
+          else
+            git diff --check "$BASE" HEAD
+          fi

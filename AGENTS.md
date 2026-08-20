@@ -7,18 +7,19 @@ These instructions apply to the entire repository. More specific `AGENTS.md` fil
 - `omdsh` is a TUI coding agent built on the published DeepSeek Harness packages and inspired by the interaction quality of oh-my-pi.
 - Preserve the DeepSeek Harness “everything is a plugin” architecture. New capabilities should be Cordis plugins, services, providers, consumers, or app composition whenever that model fits.
 - Keep product-owned implementation inside `apps/`, `packages/`, `scripts/`, and `docs/`. Do not place omdsh implementation in a reference project.
+- Authoring fixtures under `examples/` are not workspace members. Do not add them to `pnpm-workspace.yaml`, do not give them `workspace:` dependencies, and do not import them from product packages.
 - `apps/omdsh` owns the `@vanducng/oh-my-dsh` package, command startup, and runtime composition. `packages/tui/omdsh-tui` owns the `@vanducng/dsh-tui` package, terminal presentation, input, session interaction, and reusable TUI behavior.
 - Prefer deep, explicit package seams over copying upstream internals. If a second provider or consumer creates a real independent lifecycle, split the seam then rather than pre-emptively.
 
 ## Reference Repositories Are Read-Only
 
-- Everything under `refs/` is read-only reference material. Never edit, format, patch, generate files into, or commit changes inside either reference submodule.
-- `refs/deepseek-harness` is for API, architecture, and behavior research only. `refs/oh-my-pi` is for UX and TUI design research only.
+- Everything under `refs/` is read-only reference material. Never edit, format, patch, generate files into, or commit changes inside any reference submodule.
+- `refs/deepseek-harness` is for API, architecture, and behavior research only. `refs/oh-my-pi` is for UX and TUI design research only. `refs/pi` is the original Pi agent harness, kept for lineage and interaction research only.
 - Reference projects must never participate in dependency resolution, TypeScript project references, path aliases, workspace membership, builds, tests, runtime execution, package patches, or generated symlinks.
 - Do not import files from `refs/`, execute scripts from `refs/`, or add `link:refs/...`, `file:refs/...`, `paths` mappings, or package-manager overrides that point into `refs/`.
 - When upstream behavior is useful, reimplement or adapt it within an omdsh-owned package. Do not solve a missing API by modifying a reference checkout.
 - Documentation may link to files under `refs/` as supporting references, provided those links do not become runtime or build dependencies.
-- Before handing off dependency or build changes, verify that both reference submodules are clean and that no project-owned dependency symlink resolves into `refs/`.
+- Before handing off dependency or build changes, verify that all reference submodules are clean and that no project-owned dependency symlink resolves into `refs/`.
 
 ## Dependency Policy
 
@@ -87,7 +88,10 @@ pnpm test:package
 git diff --check
 ```
 
+GitHub Actions runs this set, plus `pnpm check:boundaries`, on pull requests and on pushes to `main`.
+
 - Run `pnpm smoke` when changing raw TTY input, viewport behavior, scrolling, cursor placement, Ctrl-C/Ctrl-D handling, or built-command startup.
+- Run `pnpm smoke:tui` when changing full-screen layout, session-mode overlays, composer popups, or keybindings that must be visible on the rendered 80x30 grid. That command also boots a sanitized copy of the public `vanducng/dotfiles` dsh home (never committed here). It checks the `dsh-observe` include and that `grok-4.6` reaches the footer with `plugins.yml` still mounted.
 - A change is not complete if configuration, lockfiles, source files, scripts, or dependency symlinks still point into `refs/`.
 - Before finishing dependency-boundary work, audit with commands equivalent to:
 
@@ -96,6 +100,7 @@ rg -n 'refs/deepseek-harness|link:refs' package.json pnpm-workspace.yaml pnpm-lo
 find node_modules apps packages -type l -lname '*refs/deepseek-harness*' -print
 git -C refs/deepseek-harness status --short
 git -C refs/oh-my-pi status --short
+git -C refs/pi status --short
 ```
 
-- The first two audit commands must produce no matches. Both reference submodule status commands must be clean.
+- The first two audit commands must produce no matches. All reference submodule status commands must be clean.

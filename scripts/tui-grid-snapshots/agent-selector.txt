@@ -1,0 +1,14 @@
+╭─── Agent ────────────────────────────────────────────────────────────────────╮
+│ Choose the Agent composition for this blank session                          │
+│                                                                              │
+│ Locked after the first prompt                                                │
+│                                                                              │
+│   Standard — Full coding agent with files, shell, search, skills, planning,… │
+│ ❯ PTC — Current · Standard coding agent optimized for programmatic tool cal… │
+│   Minimal — Focused two-tool coding agent with a persistent Bash session an… │
+│   Cordis — Standard coding agent with live runtime inspection and plugin ex… │
+│                                                                              │
+│ ↑↓ navigate · enter apply · esc cancel                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  deepseek-v4-flash · high · ptc · code   $WORKSPACE · main
+  Ctx 0% · 0/1M                                              0 turns · 0 steps
