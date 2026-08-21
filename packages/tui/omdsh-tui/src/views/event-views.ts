@@ -70,6 +70,30 @@ export type Block =
   | { kind: 'commandOutput'; command: string; text: string }
   | { kind: 'notice'; level: 'info' | 'error'; text: string; framed?: boolean }
 
+/** True for blocks whose rendered text may still change. */
+function isBlockPending(block: Block): boolean {
+  return (block.kind === 'assistant' && block.streaming) || (block.kind === 'tool' && block.status === 'running')
+}
+
+function settlePendingBlocks(blocks: Block[], interrupted: boolean): void {
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]
+    if (block?.kind === 'assistant' && block.streaming) {
+      blocks[index] = {
+        ...block,
+        streaming: false,
+        ...(interrupted ? { interrupted: true } : {}),
+      }
+    } else if (block?.kind === 'tool' && block.status === 'running') {
+      blocks[index] = {
+        ...block,
+        status: 'error',
+        output: block.output === '' ? 'interrupted before a result' : block.output,
+      }
+    }
+  }
+}
+
 /** Live session activity controlling the composer and activity row. */
 export type SessionStatus = 'idle' | 'running' | 'compacting'
 
@@ -204,6 +228,14 @@ export function replayEvents(
   return state
 }
 
+/** Settle incomplete durable tails when their owning Agent is already idle. */
+export function settleIdleTranscript(state: TranscriptState): TranscriptState {
+  if (!state.blocks.some(isBlockPending)) return { ...state, status: 'idle', compactCommandId: undefined }
+  const blocks = state.blocks.slice()
+  settlePendingBlocks(blocks, true)
+  return { ...state, blocks, status: 'idle', compactCommandId: undefined }
+}
+
 interface ReplayIndexes {
   readonly toolByCallId: Map<string, number>
 }
@@ -219,25 +251,17 @@ function foldEvent(
     case 'turn/start':
       return { ...state, status: 'running', turn: event.data.turn, todos: [], compactCommandId: undefined }
     case 'turn/end': {
-      const last = state.blocks[state.blocks.length - 1]
       const reason = event.data.reason
-      const changesBlocks = (last?.kind === 'assistant' && last.streaming)
-        || reason.kind === 'error'
-        || reason.kind === 'aborted'
+      const hasPending = state.blocks.some(isBlockPending)
+      const changesBlocks = hasPending || reason.kind === 'error' || reason.kind === 'aborted'
       const blocks = changesBlocks ? editableBlocks(state, mutable) : state.blocks
-      if (last?.kind === 'assistant' && last.streaming) {
-        blocks[blocks.length - 1] = { ...last, streaming: false }
-      }
+      if (hasPending) settlePendingBlocks(blocks, reason.kind === 'aborted')
       if (reason.kind === 'error') {
         blocks.push({ kind: 'notice', level: 'error', text: 'error: ' + reason.error.code + ': ' + reason.error.message })
       } else if (reason.kind === 'aborted') {
-        // rc.8 finalizes a cancelled turn's delivered prefix as an assistant
-        // block already marked interrupted; the bare notice only covers a
-        // turn that aborted before any visible content.
-        const settledLast = blocks[blocks.length - 1]
-        if (settledLast?.kind !== 'assistant' || settledLast.interrupted !== true) {
-          blocks.push({ kind: 'notice', level: 'info', text: 'interrupted' })
-        }
+        const interruptedAssistant = blocks.some(block =>
+          block.kind === 'assistant' && block.turn === event.data.turn && block.interrupted === true)
+        if (!interruptedAssistant) blocks.push({ kind: 'notice', level: 'info', text: 'interrupted' })
       }
       return { ...state, blocks, status: 'idle', compactCommandId: undefined }
     }
@@ -473,6 +497,8 @@ export interface ViewOptions {
   loopStatus?: TuiLoopStatus
   /** Live descendant-subagent roster rendered above the composer. */
   subagents?: TuiSubagentRoster
+  /** Composer-boundary launcher focus entered with Down on an empty draft. */
+  subagentLauncherFocused?: boolean
   /** Descendant whose transcript is currently filling the viewport. */
   inspected?: TuiInspectedSubagent
   /** Visible groups, order, and label style for the status line. */
@@ -710,11 +736,16 @@ export function blockLines(
   }, theme)
 }
 
-function fitFrame(lines: string[], width: number): string[] {
-  return lines.map((line) => {
-    if (visibleWidth(line) <= width) return line
-    return truncateToWidth(line, width)
-  })
+function fitFrame(lines: string[], width: number, stablePrefix = 0): string[] {
+  let fitted: string[] | undefined
+  const start = Math.max(0, Math.min(lines.length, stablePrefix))
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index]!
+    if (visibleWidth(line) <= width) continue
+    fitted ??= lines.slice()
+    fitted[index] = truncateToWidth(line, width)
+  }
+  return fitted ?? lines
 }
 
 interface TranscriptBodyCache {
@@ -846,9 +877,6 @@ function commandSurfaceName(block: Block | undefined): string | undefined {
 
 /** Rows moved per Shift+Arrow (OMP ScrollView `fastScrollLines`). */
 export const TRANSCRIPT_FAST_SCROLL = 5
-
-/** Rows moved per mouse-wheel notch. */
-export const TRANSCRIPT_WHEEL_SCROLL = 3
 
 function earlierLabel(count: number): string {
   return '… ↑ ' + count + ' earlier line' + (count === 1 ? '' : 's') + ' ⟨Pg↑⟩'
@@ -1078,12 +1106,6 @@ function subagentRowText(agent: TuiSubagentView): string {
   return detail === '' ? indent + agent.label : `${indent}${agent.label} · ${detail}`
 }
 
-/** Painted roster plus click targets relative to the first roster row. */
-export interface SubagentRosterPaint {
-  lines: string[]
-  items: readonly { id: string; row: number }[]
-}
-
 /** Compact, unframed descendant-subagent tree placed above Todos. */
 export function renderSubagents(
   roster: TuiSubagentRoster | undefined,
@@ -1091,9 +1113,10 @@ export function renderSubagents(
   width: number,
   spinnerFrame = 0,
   inspectedId?: string,
-): SubagentRosterPaint {
+  launcherFocused = false,
+): string[] {
   const agents = roster?.agents ?? []
-  if (agents.length === 0 || width <= 0) return { lines: [], items: [] }
+  if (agents.length === 0 || width <= 0) return []
   const running = agents.filter(agent => agent.phase === 'running' || agent.phase === 'starting').length
   const failed = agents.filter(agent => agent.phase === 'error').length
   const done = agents.filter(agent => agent.phase === 'completed' || agent.phase === 'waiting').length
@@ -1102,8 +1125,10 @@ export function renderSubagents(
     done === 0 ? undefined : `${done} done`,
     failed === 0 ? undefined : `${failed} failed`,
   ].filter((part): part is string => part !== undefined)
-  const header = '  ' + theme.bold(theme.fg('accent', 'Agents'))
+  const headerBody = theme.bold(theme.fg('accent', 'Agents'))
     + (counts.length === 0 ? '' : theme.fg('dim', ` · ${counts.join(' · ')}`))
+    + theme.fg('dim', launcherFocused ? ' · Enter open · Esc return' : ' · ↓ select · Alt+A open')
+  const header = '  ' + (launcherFocused ? theme.inverse(headerBody) : headerBody)
   const start = subagentPreviewStart(agents)
   const end = Math.min(agents.length, start + SUBAGENT_PREVIEW)
   const rows: Array<TuiSubagentView | string> = [
@@ -1111,11 +1136,9 @@ export function renderSubagents(
     ...agents.slice(start, end),
     ...(end === agents.length ? [] : [`… ${agents.length - end} more`]),
   ]
-  const items: { id: string; row: number }[] = []
   const lines = [header, ...rows.map((row, index) => {
     const branch = '  ' + theme.fg('dim', index === rows.length - 1 ? '└─' : '├─') + ' '
     if (typeof row === 'string') return branch + theme.fg('dim', row)
-    items.push({ id: row.id, row: index + 1 })
     const selected = inspectedId === row.id
     const paint = row.phase === 'completed'
       ? (text: string) => theme.fg('dim', theme.strikethrough(text))
@@ -1128,10 +1151,7 @@ export function renderSubagents(
     const body = marker + subagentPhaseGlyph(row.phase, theme, spinnerFrame) + ' ' + paint(subagentRowText(row))
     return branch + (selected ? theme.bold(body) : body)
   })]
-  return {
-    lines: lines.map(line => truncateToWidth(line, width)),
-    items,
-  }
+  return lines.map(line => truncateToWidth(line, width))
 }
 
 /** Persistent inspect chrome: stays visible while the child transcript scrolls. */
@@ -1147,14 +1167,6 @@ export function renderInspectBanner(
     + ' ' + theme.bold(inspected.label)
     + theme.fg('dim', ` · ${guidance}`)
   return [truncateToWidth(line, width)]
-}
-
-/** Hit a painted roster row, or `undefined` when the click is on overflow chrome. */
-export function hitTestSubagentRoster(
-  items: readonly { id: string; row: number }[],
-  localRow: number,
-): string | undefined {
-  return items.find(item => item.row === localRow)?.id
 }
 
 function queuedSubmissionLabel(submission: TuiSubmission): string {
@@ -1241,7 +1253,6 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
       lines: fitFrame(settings.lines, width),
       cursor: settings.cursor,
       cursorVisible: false,
-      overlay: { kind: 'settings', start: 0, itemRows: settings.itemRows },
     }
   }
   if (options.promptSelector?.request.presentation === 'fullscreen-list') {
@@ -1258,12 +1269,6 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
       lines: fitFrame(selector.lines, width),
       cursor: selector.cursor,
       cursorVisible: true,
-      ...(selector.editor === undefined ? {} : { editor: selector.editor }),
-      overlay: {
-        kind: 'prompt',
-        start: 0,
-        ...(selector.itemRows === undefined ? {} : { itemRows: selector.itemRows }),
-      },
     }
   }
   if (options.promptSelector?.request.presentation === 'plan-review') {
@@ -1280,12 +1285,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
       lines: fitFrame(review.lines, width),
       cursor: review.cursor,
       cursorVisible: review.cursorVisible === true,
-      ...(review.editor === undefined ? {} : { editor: review.editor }),
-      overlay: {
-        kind: 'prompt',
-        start: 0,
-        ...(review.document === undefined ? {} : { document: review.document }),
-      },
+      ...(review.document === undefined ? {} : { promptDocument: review.document }),
     }
   }
   const welcome = renderWelcome({
@@ -1380,10 +1380,9 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
     : renderQueuedSubmissions(options.queuedSubmissions ?? [], theme, width, state.nextTurnInbox)
   const todos = editor === undefined || options.inspected !== undefined ? [] : renderTodos(state.todos, theme, width)
   const inspect = editor === undefined ? [] : renderInspectBanner(options.inspected, theme, width, spinnerFrame)
-  const roster = editor === undefined
-    ? { lines: [] as string[], items: [] as readonly { id: string; row: number }[] }
-    : renderSubagents(options.subagents, theme, width, spinnerFrame, options.inspected?.id)
-  const subagents = roster.lines
+  const subagents = editor === undefined
+    ? []
+    : renderSubagents(options.subagents, theme, width, spinnerFrame, options.inspected?.id, options.subagentLauncherFocused)
   const autocomplete = promptSelector !== undefined || settings !== undefined || copySelector !== undefined || search !== undefined
     || options.autocomplete === undefined
     ? []
@@ -1399,18 +1398,21 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   const requestedStart = focusStart === undefined
     ? (options.scrollStart ?? Number.POSITIVE_INFINITY)
     : transcriptStart + focusStart
-  const windowed = windowTranscript(body, budget, requestedStart, theme)
-  const visible = windowed.lines
+  const hasOverlay = promptSelector !== undefined || settings !== undefined || copySelector !== undefined || search !== undefined
+  const isFollowing = requestedStart === Number.POSITIVE_INFINITY && !hasOverlay
+  const windowed = isFollowing
+    ? undefined
+    : windowTranscript(body, budget, requestedStart, theme)
+  const visible = windowed?.lines ?? body
 
   const lines: string[] = [...visible]
   if (visible.length > 0) lines.push('')
   const bottomRows = working.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + inputLines.length + autocomplete.length + statusFooter.length
+  const livePinned = state.blocks.some(isBlockPending) || bottomRows > height
   const fill = Math.max(0, height - lines.length - bottomRows)
   lines.push(...Array.from({ length: fill }, () => ''))
   lines.push(...working)
-  const inspectStart = lines.length
   lines.push(...inspect)
-  const subagentStart = lines.length
   lines.push(...subagents)
   lines.push(...todos)
   lines.push(...queuedSubmissions)
@@ -1418,7 +1420,27 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   lines.push(...inputLines)
   lines.push(...autocomplete)
   lines.push(...statusFooter)
-  const trimmed = fitFrame(lines, width)
+
+  let liveStart: number
+  if (isFollowing) {
+    const firstPending = state.blocks.findIndex(isBlockPending)
+    if (firstPending >= 0) {
+      liveStart = transcriptStart + transcript.blockStarts[firstPending]!
+    } else {
+      liveStart = lines.length - bottomRows
+    }
+    // liveStart marks the first row that is still live/mutable. Rows above it
+    // are committed. Off-screen live rows are bounded by the renderer: it only
+    // ever writes the live viewport, so pending rows above the visible window
+    // are not pushed into native scrollback until they become committed.
+  } else {
+    liveStart = 0
+  }
+
+  // Every settled block was already rendered against this width. Mirroring
+  // OMP's stable-prefix preparation, only validate the mutable suffix instead
+  // of measuring the complete native-scrollback history on every frame.
+  const trimmed = fitFrame(lines, width, isFollowing ? liveStart : 0)
   const caret = promptSelector?.cursor ?? settings?.cursor ?? copySelector?.cursor ?? search?.cursor ?? editor?.cursor ?? { row: 0, column: 0 }
   return {
     lines: trimmed,
@@ -1430,34 +1452,14 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
       || (options.inspected !== undefined && options.inspected.writable !== true)
       ? false
       : promptSelector?.cursorVisible ?? (settings === undefined && copySelector === undefined),
-    ...(promptSelector?.editor !== undefined
-      ? { editor: { start: editorStart + promptSelector.editor.start, rows: promptSelector.editor.rows } }
-      : editor === undefined ? {} : { editor: { start: editorStart, rows: editor.lines.length } }),
-    ...(settings !== undefined
-      ? { overlay: { kind: 'settings' as const, start: editorStart } }
-      : copySelector !== undefined
-        ? { overlay: { kind: 'copy' as const, start: editorStart } }
-        : search !== undefined
-          ? { overlay: { kind: 'search' as const, start: editorStart, resultsRow: search.resultsRow } }
-          : autocomplete.length > 0
-            ? { overlay: { kind: 'autocomplete' as const, start: editorStart + (editor?.lines.length ?? 0) } }
-            : {}),
-    transcript: {
-      start: windowed.start,
-      maxStart: windowed.maxStart,
-      budget: windowed.budget,
-      hiddenAbove: windowed.hiddenAbove,
-      hiddenBelow: windowed.hiddenBelow,
+    liveStart,
+    livePinned,
+    transcript: windowed ?? {
+      start: 0,
+      maxStart: 0,
+      budget,
+      hiddenAbove: 0,
+      hiddenBelow: 0,
     },
-    ...(inspect.length === 0 && subagents.length === 0
-      ? {}
-      : {
-        chrome: {
-          ...(inspect.length === 0 ? {} : { inspect: { start: inspectStart, rows: inspect.length } }),
-          ...(subagents.length === 0
-            ? {}
-            : { subagents: { start: subagentStart, headerRows: 1, rows: subagents.length, items: roster.items } }),
-        },
-      }),
   }
 }

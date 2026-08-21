@@ -21,7 +21,6 @@ describe('formatHotkeysText', () => {
     expect(text).not.toContain('/hotkeys')
     expect(text).toContain('PgUp')
     expect(text).toContain('Ctrl+O')
-    expect(text).toContain('Mouse wheel')
     expect(text).toContain('Ctrl+G')
     expect(text).toContain('Edit the prompt in $VISUAL or $EDITOR')
     expect(text).toContain('Alt+A')

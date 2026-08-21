@@ -69,6 +69,7 @@ describe('omdsh smoke', () => {
         timeout: 180_000,
         env,
       })
+    const idsAfterResume = findSessionIds(omdshHome)
     rmSync(omdshHome, { recursive: true, force: true })
     const createdOut = (created.stdout ?? '') + (created.stderr ?? '')
     const resumedOut = resumed === undefined ? '' : (resumed.stdout ?? '') + (resumed.stderr ?? '')
@@ -77,6 +78,7 @@ describe('omdsh smoke', () => {
     expect(sessionId).toEqual(expect.stringMatching(/^session-/u))
     expect(resumed?.status, resumedOut).toBe(0)
     expect(resumedOut).toContain(`Resumed ${sessionId}.`)
+    expect(idsAfterResume).toEqual(ids)
     expect(resumedOut).not.toContain('unknown to this harness')
     expect(resumedOut).not.toContain('omdsh/tools-selected')
   }, 200_000)

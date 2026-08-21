@@ -25,21 +25,52 @@ function fail(error: unknown, exit: (code: number) => void): void {
   exit(1)
 }
 
-async function run(ctx: Context, tui: TuiService): Promise<void> {
+export async function run(ctx: Context, tui: TuiService): Promise<void> {
   await ctx.get('loader')?.await()
   const controller = ctx.get('omdshSession')
   if (controller === undefined) return
   const loop = ctx.get('omdshLoop')
+  const args = ctx.get('cmdlineArgs')?.get() ?? []
+  const resumeId = args[0] === '--resume' ? args[1] : undefined
 
-  await controller.start()
-  void ctx.get('omdshStartup')?.afterSessionStart().catch(() => {})
   let operation: AbortController | undefined
+  let startupResume: AbortController | undefined
   const offInterrupt = tui.onInterrupt(() => {
+    if (startupResume !== undefined) {
+      startupResume.abort(new Error('cancelled by user'))
+      return
+    }
     if (controller.interruptVisible()) return
     operation?.abort(new Error('cancelled by user'))
     loop?.pause(controller.agent)
     controller.agent?.cancel({ kind: 'user' })
   })
+
+  if (resumeId !== undefined) {
+    const resume = new AbortController()
+    startupResume = resume
+    tui.setStatus('running')
+    try {
+      await controller.start({ resumeId, signal: resume.signal })
+      resume.signal.throwIfAborted()
+      tui.notice(`Resumed ${resumeId}.`)
+    } catch (error: unknown) {
+      if (resume.signal.aborted) {
+        tui.setStatus('idle')
+        loop?.disable()
+        offInterrupt()
+        ctx.get('appExit')?.(0)
+        return
+      }
+      await controller.start()
+      tui.notice('Resume failed: ' + (error instanceof Error ? error.message : String(error)), { level: 'error' })
+    } finally {
+      if (startupResume === resume) startupResume = undefined
+    }
+  } else {
+    await controller.start()
+  }
+  void ctx.get('omdshStartup')?.afterSessionStart().catch(() => {})
   let queueEditInFlight = false
   const offQueueEdit = tui.onQueueEdit(() => {
     if (queueEditInFlight) return
@@ -64,20 +95,7 @@ async function run(ctx: Context, tui: TuiService): Promise<void> {
     })
   })
   try {
-    const args = ctx.get('cmdlineArgs')?.get() ?? []
-    if (args[0] === '--resume' && args[1] !== undefined) {
-      operation = new AbortController()
-      try {
-        await controller.execute(`/resume ${args[1]}`, operation.signal)
-      } catch (error: unknown) {
-        if (!operation.signal.aborted) tui.notice(error instanceof Error ? error.message : String(error), { level: 'error' })
-      } finally {
-        operation = undefined
-        loop?.syncAgent(controller.agent)
-      }
-    } else if (args.length > 0) {
-      await controller.send(args.join(' '))
-    }
+    if (resumeId === undefined && args.length > 0) await controller.send(args.join(' '))
     for (;;) {
       const submission = await tui.readInput()
       if (submission === null) break

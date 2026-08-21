@@ -81,7 +81,8 @@ Ordinary messages enter the active Agent through `session-runtime`. Slash comman
 
 - Layout uses terminal display cells, including ANSI sequences, CJK text, emoji, combining characters, and long unbroken content.
 - The composer and two-line status footer stay anchored at the bottom while the transcript viewport scrolls independently.
-- Settled transcript layouts are cached, wheel updates are coalesced, and the renderer emits row-level differences instead of repainting the complete screen.
+- The `MainScreenRenderer` uses native terminal scrollback as an append-only frozen visual record and never erases host history. During stable terminal geometry, finalized rows are rewritten with final content immediately before they leave the live screen. Streaming assistant Markdown and running-tool previews stay in the alternate buffer until settlement, preventing provisional or stale rows from entering native history during growth or resize. Production startup waits for the initial session projection instead of painting a provisional Header. Session replacement and `/clear` start a non-destructive visual epoch with `ED2`, replaying finalized content while preserving earlier shell and session history. Renderer geometry updates immediately on resize; multiplexer repaint bursts remain coalesced so no frame is painted against mismatched dimensions. The renderer never enables 1000/1006 mouse tracking and wraps each paint in one DEC 2026 synchronized write.
+- Settled transcript layouts are cached and the renderer emits row-level differences instead of repainting the complete screen.
 - Modal selectors own input and cursor visibility until they settle, then restore the composer.
 - The first Ctrl-C clears or interrupts; a second Ctrl-C exits. Ctrl-D exits directly, and a durable session produces an `omdsh --resume <session-id>` hint.
 - Pipe mode uses the same command and session semantics without claiming ownership of an interactive screen.

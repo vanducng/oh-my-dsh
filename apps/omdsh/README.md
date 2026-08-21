@@ -32,9 +32,9 @@ Run `/login` once inside omdsh to validate and save your DeepSeek API key, then 
 - **Durable conversations:** resume sessions, rewind to a human turn, retry, compact, and export complete transcripts as Markdown.
 - **Four real session controls:** choose a Harness Agent preset (Standard, PTC, Minimal, or Cordis), Workflow (Default or Plan), tool presentation (Native, Code, or Both), and Access (Read only, Workspace write, or Full access).
 - **Rich terminal input:** mention project files and other sessions with `@`, paste clipboard images, reuse persistent prompt history, edit multiline prompts externally, and retrieve queued follow-ups.
-- **Readable tool activity:** follow streaming calls and live subagent progress, open a child's transcript from the Agents roster, steer a continuable child from that view, inspect distinct Input and Output sections, expand long results, and keep domain-specific presentation owned by tool plugins.
+- **Readable tool activity:** follow streaming calls and live subagent progress, press Down on an empty composer then Enter (or use Alt+A directly) to select a child in the keyboard-driven Agent Hub, steer a continuable child from its transcript, inspect distinct Input and Output sections, expand long results, and keep domain-specific presentation owned by tool plugins.
 - **Live operational context:** see Agent, Workflow, Tools, Access, model, reasoning effort, workspace, Git state, context pressure, tokens, TTFT, throughput, cache, timings, turns, and steps without leaving the composer.
-- **Responsive by design:** retain settled transcript layout, coalesce scroll updates, emit row-level terminal diffs, and preserve correct display-cell alignment for CJK text and emoji.
+- **Responsive by design:** retain settled transcript layout, preserve native scrollback, emit row-level terminal diffs, and preserve correct display-cell alignment for CJK text and emoji.
 
 ## Learn
 
@@ -75,7 +75,7 @@ The TUI package is split into a service definition, local terminal Provider, ses
 
 ## Performance
 
-Performance is part of the TUI architecture: durable sessions replay in linear time, Harness Projections avoid repeated history scans, settled transcript blocks retain formatted layout, and the terminal writer emits row-level diffs. On the documented Apple M5 Pro environment, restoring 10,000 conversation turns takes a median 2.15 ms, 10,000 tool calls take 21.21 ms, and cached updates over a 5,000-turn surface average 0.24 ms per frame.
+Performance is part of the TUI architecture: durable sessions replay in linear time, Harness Projections avoid repeated history scans, settled transcript blocks retain formatted layout, and the terminal writer emits row-level diffs. On the documented Apple M5 Pro environment, restoring 10,000 conversation turns takes a median 2.62 ms, 10,000 tool calls take 22.71 ms, and cached updates over a 5,000-turn surface average 0.35 ms per frame.
 
 See the reproducible [TUI performance report](https://github.com/vanducng/oh-my-dsh/blob/main/docs/performance.md) or run `pnpm benchmark:tui` locally.
 
