@@ -75,6 +75,25 @@ function isBlockPending(block: Block): boolean {
   return (block.kind === 'assistant' && block.streaming) || (block.kind === 'tool' && block.status === 'running')
 }
 
+function settlePendingBlocks(blocks: Block[], interrupted: boolean): void {
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]
+    if (block?.kind === 'assistant' && block.streaming) {
+      blocks[index] = {
+        ...block,
+        streaming: false,
+        ...(interrupted ? { interrupted: true } : {}),
+      }
+    } else if (block?.kind === 'tool' && block.status === 'running') {
+      blocks[index] = {
+        ...block,
+        status: 'error',
+        output: block.output === '' ? 'interrupted before a result' : block.output,
+      }
+    }
+  }
+}
+
 /** Live session activity controlling the composer and activity row. */
 export type SessionStatus = 'idle' | 'running' | 'compacting'
 
@@ -209,6 +228,14 @@ export function replayEvents(
   return state
 }
 
+/** Settle incomplete durable tails when their owning Agent is already idle. */
+export function settleIdleTranscript(state: TranscriptState): TranscriptState {
+  if (!state.blocks.some(isBlockPending)) return { ...state, status: 'idle', compactCommandId: undefined }
+  const blocks = state.blocks.slice()
+  settlePendingBlocks(blocks, true)
+  return { ...state, blocks, status: 'idle', compactCommandId: undefined }
+}
+
 interface ReplayIndexes {
   readonly toolByCallId: Map<string, number>
 }
@@ -224,25 +251,17 @@ function foldEvent(
     case 'turn/start':
       return { ...state, status: 'running', turn: event.data.turn, todos: [], compactCommandId: undefined }
     case 'turn/end': {
-      const last = state.blocks[state.blocks.length - 1]
       const reason = event.data.reason
-      const changesBlocks = (last?.kind === 'assistant' && last.streaming)
-        || reason.kind === 'error'
-        || reason.kind === 'aborted'
+      const hasPending = state.blocks.some(isBlockPending)
+      const changesBlocks = hasPending || reason.kind === 'error' || reason.kind === 'aborted'
       const blocks = changesBlocks ? editableBlocks(state, mutable) : state.blocks
-      if (last?.kind === 'assistant' && last.streaming) {
-        blocks[blocks.length - 1] = { ...last, streaming: false }
-      }
+      if (hasPending) settlePendingBlocks(blocks, reason.kind === 'aborted')
       if (reason.kind === 'error') {
         blocks.push({ kind: 'notice', level: 'error', text: 'error: ' + reason.error.code + ': ' + reason.error.message })
       } else if (reason.kind === 'aborted') {
-        // rc.8 finalizes a cancelled turn's delivered prefix as an assistant
-        // block already marked interrupted; the bare notice only covers a
-        // turn that aborted before any visible content.
-        const settledLast = blocks[blocks.length - 1]
-        if (settledLast?.kind !== 'assistant' || settledLast.interrupted !== true) {
-          blocks.push({ kind: 'notice', level: 'info', text: 'interrupted' })
-        }
+        const interruptedAssistant = blocks.some(block =>
+          block.kind === 'assistant' && block.turn === event.data.turn && block.interrupted === true)
+        if (!interruptedAssistant) blocks.push({ kind: 'notice', level: 'info', text: 'interrupted' })
       }
       return { ...state, blocks, status: 'idle', compactCommandId: undefined }
     }
@@ -1381,7 +1400,6 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
     : transcriptStart + focusStart
   const hasOverlay = promptSelector !== undefined || settings !== undefined || copySelector !== undefined || search !== undefined
   const isFollowing = requestedStart === Number.POSITIVE_INFINITY && !hasOverlay
-  const livePinned = state.blocks.some(block => block.kind === 'tool' && block.status === 'running')
   const windowed = isFollowing
     ? undefined
     : windowTranscript(body, budget, requestedStart, theme)
@@ -1390,6 +1408,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   const lines: string[] = [...visible]
   if (visible.length > 0) lines.push('')
   const bottomRows = working.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + inputLines.length + autocomplete.length + statusFooter.length
+  const livePinned = state.blocks.some(isBlockPending) || bottomRows > height
   const fill = Math.max(0, height - lines.length - bottomRows)
   lines.push(...Array.from({ length: fill }, () => ''))
   lines.push(...working)

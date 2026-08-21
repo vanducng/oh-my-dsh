@@ -19,7 +19,11 @@ process.on('exit', () => { rmSync(omdshHome, { recursive: true, force: true }) }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const cleanOutput = (value) => value.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '')
-const hasReasoningEffort = (value) => /deepseek-v4-flash · (?:off|low|high|max)/u.test(cleanOutput(value))
+const hasReasoningEffort = (value) => {
+  const text = cleanOutput(value)
+  return /deepseek-v4-flash · (?:off|low|high|max)/u.test(text)
+    || (text.includes('deepseek-v4-flash') && /│\s+(?:off|low|high|max)\s+│/u.test(text))
+}
 
 // OMDSH_RUN_MODE=built exercises the shipped artifact (lib/bin.js); the
 // default exercises the tsx source launch.

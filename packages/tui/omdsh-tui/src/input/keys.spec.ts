@@ -39,6 +39,7 @@ describe('parseKeys', () => {
 
   it('decodes alt letters, alt+enter, and kitty/modifyOtherKeys enter', () => {
     expect(parseKeys('\x1bb').events).toEqual([{ type: 'key', id: 'alt+b' }])
+    expect(parseKeys('\x1ba').events).toEqual([{ type: 'key', id: 'alt+a' }])
     expect(parseKeys('\x1b\r').events).toEqual([{ type: 'key', id: 'alt+enter' }])
     expect(parseKeys('\x1b\x7f').events).toEqual([{ type: 'key', id: 'alt+backspace' }])
     expect(parseKeys('\x1bl').events).toEqual([{ type: 'key', id: 'alt+l' }])

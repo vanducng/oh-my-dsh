@@ -4,9 +4,7 @@
  * scroll, Ctrl-O tool expand, submit), double-Escape rewind, double Ctrl-C exit, Ctrl-D quit and the
  * cross-turn quit latch, plain-mode line input, and event rendering.
  */
-import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
@@ -109,15 +107,6 @@ function emulatedScreenRows(output: string): string[] {
   return Array.from(rows, value => value ?? '')
 }
 
-/** Status-line workspace label: home-relative git root, matching LocalTui. */
-function shortenedWorkspaceRoot(): string {
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
-  const home = homedir()
-  if (root === home) return '~'
-  if (root.startsWith(`${home}/`)) return `~${root.slice(home.length)}`
-  return root
-}
-
 describe('LocalTui (tty)', () => {
   it('repaints the footer when live Agent and tool controls change', () => {
     const term = new FakeTerminal()
@@ -164,7 +153,7 @@ describe('LocalTui (tty)', () => {
     const term = new FakeTerminal()
     term.rows = 12
     const tui = new LocalTui(term, 'm', false)
-    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(1)
+    expect(term.captured).not.toContain('\x1b[3J')
 
     const restored = Array.from({ length: 30 }, (_, index) => `restored-${index}`).join('\n')
     tui.replaceSession([
@@ -176,14 +165,13 @@ describe('LocalTui (tty)', () => {
       }, 2),
     ])
 
-    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(2)
+    expect(term.captured).not.toContain('\x1b[3J')
     const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
-    expect(screen).toContain('resumed prompt')
-    expect(screen).toContain('restored-0')
-    expect(screen).toContain('restored-15')
     expect(screen).toContain('restored-29')
-    expect(screen).toContain('Into the Unknown')
+    expect(term.captured).toContain('Into the Unknown')
+    expect(term.captured).not.toContain('\x1b[?1049h')
     tui.dispose()
+    expect(term.captured).toContain('restored-29')
   })
 
   it('defers the production first frame until the initial session is available', () => {
@@ -200,7 +188,32 @@ describe('LocalTui (tty)', () => {
     ], undefined, 'idle')
     expect(term.captured).toContain('Into the Unknown')
     expect(term.captured).toContain('initial session')
-    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(1)
+    expect(term.captured).not.toContain('\x1b[3J')
+    tui.dispose()
+  })
+
+  it('publishes the complete deferred session presentation in the first frame', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'placeholder', false, 'dark', copyToClipboard, { deferInitialRender: true })
+    const before = term.writes
+
+    tui.setStatus('idle')
+    tui.setModel('deepseek-v4-pro', 'max')
+    tui.setSession({
+      id: 'session-atomic',
+      recent: [],
+      controls: { agentPreset: 'standard', tools: 'both' },
+    })
+    expect(term.writes).toBe(before)
+
+    tui.replaceSession([
+      ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'atomic session' }] }, 1),
+    ])
+    expect(term.writes).toBe(before + 1)
+    expect(term.captured).toContain('deepseek-v4-pro')
+    expect(term.captured).toContain('max')
+    expect(term.captured).toContain('standard · both')
+    expect(term.captured).toContain('atomic session')
     tui.dispose()
   })
 
@@ -238,10 +251,73 @@ describe('LocalTui (tty)', () => {
 
     term.resize(70, 20)
     term.resize(72, 21)
+    tui.setModel('m-resized')
     expect(term.writes).toBe(beforeResize)
 
     await new Promise<void>(resolve => { setTimeout(resolve, 15) })
     expect(term.writes).toBe(beforeResize + 1)
+    tui.dispose()
+  })
+
+  it('keeps streaming assistant surfaces off main scrollback through resize and settlement', async () => {
+    const term = new FakeTerminal()
+    term.rows = 8
+    const tui = new LocalTui(term, 'm', false)
+    term.captured = ''
+
+    tui.event(ev('assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', index: 0, text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n') },
+    }, 1))
+    await new Promise<void>(resolve => { setTimeout(resolve, 15) })
+    expect(term.captured).toContain('\x1b[?1049h')
+    expect(term.captured).not.toContain('\x1b[?1049l')
+    expect(term.captured).not.toContain('\x1b[3J')
+
+    const beforeResize = term.captured.length
+    term.resize(term.columns, 5)
+    const resizePaint = term.captured.slice(beforeResize)
+    expect(resizePaint).toContain('\x1b[?1049l')
+    expect(resizePaint).toContain('\x1b[?1049h')
+    tui.event(ev('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { content: [{ type: 'text', text: 'final assistant text' }] },
+    }, 2))
+    expect(term.captured).toContain('\x1b[?1049l')
+    expect(term.captured).toContain('final assistant text')
+    expect(term.captured).not.toContain('\x1b[3J')
+    tui.dispose()
+  })
+
+  it('keeps running tool previews off main scrollback through shrink and settlement', () => {
+    const term = new FakeTerminal()
+    term.rows = 8
+    const tui = new LocalTui(term, 'm', false)
+    term.captured = ''
+
+    tui.event(ev('tool/call', {
+      callId: 'call-resize',
+      name: 'bash',
+      arguments: JSON.stringify({ command: Array.from({ length: 20 }, (_, index) => `preview-${index}`).join('\n') }),
+    }, 1))
+    expect(term.captured).toContain('\x1b[?1049h')
+    const beforeResize = term.captured.length
+    term.resize(term.columns, 5)
+    const resizePaint = term.captured.slice(beforeResize)
+    expect(resizePaint).toContain('\x1b[?1049l')
+    expect(resizePaint).toContain('\x1b[?1049h')
+
+    tui.event(ev('tool/result', {
+      message: {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'call-resize', content: [{ type: 'text', text: 'settled output' }] }],
+      },
+    }, 2))
+    expect(term.captured).toContain('\x1b[?1049l')
+    expect(term.captured).toContain('settled output')
+    expect(term.captured).not.toContain('\x1b[3J')
     tui.dispose()
   })
 
@@ -709,10 +785,85 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
 
     const rows = emulatedScreenRows(term.captured)
-    const statusRow = rows.findIndex(line => line.includes(shortenedWorkspaceRoot()))
+    const footerRow = rows.findLastIndex(line => line.includes('deepseek-v4-flash'))
     const resumeRow = rows.findIndex(line => line.includes('Resume this session with omdsh --resume'))
-    expect(statusRow).toBeGreaterThanOrEqual(0)
-    expect(resumeRow).toBeGreaterThan(statusRow)
+    expect(footerRow).toBeGreaterThanOrEqual(0)
+    expect(resumeRow).toBeGreaterThan(footerRow)
+  })
+
+  it('releases and reacquires terminal ownership across Ctrl-Z', async () => {
+    if (process.platform === 'win32') return
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 0 })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      tui.event(ev('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'text-delta', index: 0, text: 'streaming' },
+      }, 1))
+      expect(term.captured).toContain('\x1b[?1049h')
+
+      press(term, '\x1a')
+      expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTSTP')
+      expect(term.raw).toBe(false)
+      expect(term.captured).toContain('\x1b[?1049l')
+      expect(term.captured).toContain('\x1b[?2004l')
+
+      term.output.write('SHELL-JOB\r\nSHELL-PROMPT\r\n')
+      const hostMark = term.captured.lastIndexOf('SHELL-PROMPT')
+      process.emit('SIGCONT')
+      await Promise.resolve()
+      expect(term.raw).toBe(true)
+      expect(term.captured.match(/\x1b\[\?1049h/gu)?.length).toBeGreaterThan(1)
+      expect(term.captured.slice(hostMark)).toContain('streaming')
+      expect(term.captured.slice(hostMark)).not.toContain('\x1b[3J')
+
+      tui.dispose()
+      const writes = term.writes
+      process.emit('SIGCONT')
+      expect(term.writes).toBe(writes)
+    } finally {
+      kill.mockRestore()
+      tui.dispose()
+    }
+  })
+
+  it('releases mutable alternate-screen ownership around the external editor', () => {
+    const term = new FakeTerminal()
+    let rawDuringEditor = true
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      streamRenderMs: 0,
+      editExternally: () => {
+        rawDuringEditor = term.raw
+        term.output.write('\x1b[?1049hEDITOR\x1b[?1049lEDITOR-MAIN\r\n')
+        return 'edited prompt'
+      },
+    })
+    tui.event(ev('assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', index: 0, text: 'streaming' },
+    }, 1))
+    expect(term.captured).toContain('\x1b[?1049h')
+
+    const mark = term.captured.length
+    press(term, '\x07')
+    const handoff = term.captured.slice(mark)
+    const editorEnter = handoff.indexOf('\x1b[?1049hEDITOR')
+    const editorExit = handoff.indexOf('\x1b[?1049l', editorEnter)
+    expect(rawDuringEditor).toBe(false)
+    expect(handoff.indexOf('\x1b[?1049l')).toBeLessThan(editorEnter)
+    expect(editorEnter).toBeGreaterThanOrEqual(0)
+    expect(editorExit).toBeGreaterThan(editorEnter)
+    expect(handoff).toContain('EDITOR-MAIN')
+    expect(handoff.lastIndexOf('\x1b[?1049h')).toBeGreaterThan(handoff.indexOf('EDITOR-MAIN'))
+    expect(handoff).toContain('\x1b[?2004l')
+    expect(handoff).toContain('\x1b[?2004h')
+    expect(handoff).not.toContain('\x1b[3J')
+    expect(term.raw).toBe(true)
+    expect(stripAnsi(term.captured)).toContain('edited prompt')
+    tui.dispose()
   })
 
   it('quits on Ctrl-D with an empty buffer', async () => {
@@ -753,11 +904,17 @@ describe('LocalTui (tty)', () => {
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'a' } }, 1))
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'b' } }, 2))
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'c' } }, 3))
+      tui.setSession({
+        id: 'session-stream',
+        recent: [],
+        controls: { agentPreset: 'ptc', tools: 'code' },
+      })
       expect(term.writes).toBe(initialWrites)
 
       await vi.advanceTimersByTimeAsync(8)
       expect(term.writes).toBe(initialWrites + 1)
       expect(term.captured).toContain('abc')
+      expect(stripAnsi(term.captured)).toContain('ptc · code')
 
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'd' } }, 4))
       tui.event(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 5))
@@ -1766,6 +1923,35 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
+  it('promotes settled rows from a scrolled alternate screen before disposal', () => {
+    const term = new FakeTerminal()
+    term.rows = 10
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      terminalProfile: 'direct',
+      alternateScreenOverlays: true,
+    })
+    for (let index = 0; index < 20; index += 1) {
+      tui.event(ev('user/message', {
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: `history-${index}` }],
+      }, index + 1))
+    }
+
+    press(term, '\x1b[5~')
+    expect(term.captured).toContain('\x1b[?1049h')
+    tui.event(ev('user/message', {
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: 'SETTLED-WHILE-SCROLLED' }],
+    }, 100))
+
+    const beforeRelease = term.captured.length
+    tui.dispose()
+    const release = term.captured.slice(beforeRelease)
+    const exitAlt = release.indexOf('\x1b[?1049l')
+    expect(exitAlt).toBeGreaterThanOrEqual(0)
+    expect(release.slice(exitAlt)).toContain('SETTLED-WHILE-SCROLLED')
+  })
+
   it('expands tool output when expandTools pref is on', () => {
     const term = new FakeTerminal()
     term.height = () => 80
@@ -1781,24 +1967,52 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('toggles truncated tool output on ctrl+o', () => {
+  it('starts a layout epoch when a large tool card expands and collapses', () => {
     const term = new FakeTerminal()
-    term.height = () => 80
+    term.rows = 10
     const tui = new LocalTui(term, 'm', false)
-    const output = Array.from({ length: 14 }, (_, i) => 'tool-line-' + i).join('\n')
+    const output = Array.from({ length: 30 }, (_, i) => 'tool-line-' + i).join('\n')
     tui.event(ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{}' }, 1))
     tui.event(ev('tool/result', {
       message: { role: 'user', content: [{ type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: output }] }] },
     }, 2))
     expect(term.captured).toContain('tool-line-0')
     expect(term.captured).toContain('Ctrl+O: Expand')
-    expect(term.captured).not.toContain('tool-line-13')
+    expect(term.captured).not.toContain('tool-line-29')
+    const beforeExpand = term.captured.length
     press(term, '\x0f')
-    expect(term.captured).toContain('tool-line-13')
+    expect(term.captured.slice(beforeExpand)).toContain('tool-line-29')
     const afterExpand = term.captured.length
     press(term, '\x0f')
     expect(term.captured.slice(afterExpand)).toContain('Ctrl+O: Expand')
-    expect(term.captured.slice(afterExpand)).not.toContain('tool-line-13')
+    const collapsed = emulatedScreenRows(term.captured).slice(-term.rows).map(stripAnsi).join('\n')
+    expect(collapsed).not.toContain('tool-line-29')
+    tui.dispose()
+  })
+
+  it('starts a layout epoch when the expandTools preference changes', () => {
+    const term = new FakeTerminal()
+    term.rows = 10
+    const tui = new LocalTui(term, 'm', false)
+    const output = Array.from({ length: 30 }, (_, i) => 'pref-line-' + i).join('\n')
+    tui.event(ev('tool/call', { callId: 'call-pref', name: 'bash', arguments: '{}' }, 1))
+    tui.event(ev('tool/result', {
+      message: { role: 'user', content: [{ type: 'tool-result', toolCallId: 'call-pref', content: [{ type: 'text', text: output }] }] },
+    }, 2))
+
+    const beforeExpand = term.captured.length
+    tui.applyStoredPrefs({ theme: 'dark', colors: false, expandTools: true })
+    const expandedEpoch = term.captured.slice(beforeExpand)
+    expect(expandedEpoch).toContain('Ctrl+O: Expand')
+    expect(expandedEpoch).toContain('pref-line-29')
+    const beforeCollapse = term.captured.length
+    tui.applyStoredPrefs({ theme: 'dark', colors: false, expandTools: false })
+    const collapsedEpoch = term.captured.slice(beforeCollapse)
+    expect(collapsedEpoch).toContain('pref-line-29')
+    expect(collapsedEpoch).toContain('Ctrl+O: Expand')
+    expect(collapsedEpoch).not.toContain('\x1b[3J')
+    const collapsed = emulatedScreenRows(term.captured).slice(-term.rows).map(stripAnsi).join('\n')
+    expect(collapsed).not.toContain('pref-line-29')
     tui.dispose()
   })
 
@@ -1824,6 +2038,19 @@ describe('LocalTui (tty)', () => {
     await flushAsyncPaste()
 
     expect(opened).toEqual(['child-2'])
+    tui.dispose()
+  })
+
+  it('opens the Agent Hub directly with Alt+A', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    tui.setSubagents({
+      agents: [{ id: 'child-1', depth: 1, label: 'Explore auth', phase: 'running', activity: [] }],
+    })
+
+    press(term, '\x1ba')
+    expect(term.captured).toContain('Agent Hub')
+    expect(term.captured).toContain('Explore auth')
     tui.dispose()
   })
 

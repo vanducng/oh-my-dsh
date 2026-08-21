@@ -3,23 +3,20 @@
  *
  * The terminal owns native scrollback. This renderer owns only the current
  * screen and a logical boundary for rows already frozen above it. Routine
- * updates treat native history as append-only. Explicit transcript epochs
- * clear it once and replay the replacement frame from a clean origin.
+ * updates and explicit transcript epochs both preserve host history.
  *
  * Finalized rows cross the boundary by being painted at the top of the screen
- * immediately before a newline scrolls them into history. Pending rows remain
- * in the mutable screen tail. A terminal height change is the one exception:
- * the terminal itself can move visible rows across the scrollback boundary, so
- * the renderer adopts that new physical boundary instead of emitting the rows
- * again.
+ * immediately before a newline scrolls them into history. Mutable assistant
+ * and tool surfaces use the alternate buffer until settlement, so terminal
+ * resizes cannot freeze provisional rows into native history.
  *
  * reset() repairs the visible screen without replaying history. A logical
- * conversation replacement must call startEpoch() so stale native history is
- * cleared before the replacement transcript is replayed.
+ * conversation replacement calls startEpoch() to append a new visual epoch
+ * after clearing only the visible screen.
  *
  * The renderer never enables mouse tracking (1000/1006) and wraps every paint
  * in one DEC 2026 synchronized write.
- * @module @agi-fans/dsh-tui
+ * @module @vanducng/dsh-tui
  */
 import { sanitizeDisplayLine, type Frame, type RenderSink } from './renderer.ts'
 
@@ -31,7 +28,6 @@ const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
 const ENTER_ALT_SCREEN = '\x1b[?1049h'
 const EXIT_ALT_SCREEN = '\x1b[?1049l'
-const CLEAR_SCROLLBACK = '\x1b[3J'
 const CLEAR_SCREEN = '\x1b[2J\x1b[H'
 const CLEAR_LINE = '\x1b[2K'
 
@@ -46,10 +42,12 @@ export interface MainScreenRendererOptions {
   width?: number
   /** Wrap the paint in synchronized output (DEC 2026). */
   synchronized?: boolean
-  /** Whether explicit transcript replacement may erase native scrollback. */
-  clearScrollback?: boolean
   /** Borrow the alternate buffer for transient full-screen surfaces. */
   alternateScreenOverlays?: boolean
+  /** Keep mutable assistant and tool surfaces out of native scrollback. */
+  alternateScreenMutable?: boolean
+  /** Scroll the pre-existing terminal screen into history before first paint. */
+  preserveInitialScreen?: boolean
 }
 
 export interface EpochOptions {
@@ -77,8 +75,9 @@ interface ResizeBaseline {
 export class MainScreenRenderer {
   readonly #sink: RenderSink
   readonly #synchronized: boolean
-  readonly #canClearScrollback: boolean
   readonly #alternateScreenOverlays: boolean
+  readonly #alternateScreenMutable: boolean
+  readonly #preserveInitialScreen: boolean
   #width: number
   #height: number
   #resize: ResizeTransition | undefined
@@ -86,7 +85,6 @@ export class MainScreenRenderer {
   #reanchor = false
   #newEpoch = false
   #fullReplayOnNextEpoch = true
-  #clearScrollbackOnNextRender = false
   #adoptPhysicalAfterTransient = false
   /** First logical row not frozen above the screen in the current epoch. */
   #physical = 0
@@ -94,7 +92,12 @@ export class MainScreenRenderer {
   #screen: string[]
   #transient = false
   #altActive = false
+  #altMutable = false
+  #altGeometryDirty = false
   #altScreen: string[]
+  #frameLines: readonly string[] = []
+  #frameLiveStart = 0
+  #preserveScreenOnNextRender = false
   #cursorRow = 0
   #cursorCol = 0
   #cursorVisible = true
@@ -106,8 +109,9 @@ export class MainScreenRenderer {
     this.#screen = this.#blankScreen()
     this.#altScreen = this.#blankScreen()
     this.#synchronized = options.synchronized === true
-    this.#canClearScrollback = options.clearScrollback !== false
     this.#alternateScreenOverlays = options.alternateScreenOverlays === true
+    this.#alternateScreenMutable = options.alternateScreenMutable === true
+    this.#preserveInitialScreen = options.preserveInitialScreen === true
   }
 
   /** Record terminal geometry; the terminal has already performed the resize. */
@@ -119,6 +123,7 @@ export class MainScreenRenderer {
     this.#resize = transition
     this.#width = width
     this.#height = nextHeight
+    this.#altGeometryDirty = true
   }
 
   /** Repaint the current viewport without replaying frozen history. */
@@ -126,42 +131,87 @@ export class MainScreenRenderer {
     this.#reanchor = true
   }
 
-  /** Replace native history with a new logical transcript on the next paint. */
+  /** Abandon terminal state changed by another foreground process. */
+  reacquire(): void {
+    this.#resize = undefined
+    this.#hasFrame = false
+    this.#reanchor = true
+    this.#newEpoch = true
+    this.#fullReplayOnNextEpoch = true
+    this.#adoptPhysicalAfterTransient = false
+    this.#physical = 0
+    this.#screen = this.#blankScreen()
+    this.#transient = false
+    this.#altActive = false
+    this.#altMutable = false
+    this.#altGeometryDirty = false
+    this.#altScreen = this.#blankScreen()
+    this.#frameLines = []
+    this.#frameLiveStart = 0
+    this.#preserveScreenOnNextRender = true
+    this.#cursorRow = 0
+    this.#cursorCol = 0
+    this.#cursorVisible = true
+  }
+
+  /** Append a new logical transcript epoch on the next paint. */
   startEpoch(options: EpochOptions = {}): void {
     this.#newEpoch = true
     this.#fullReplayOnNextEpoch = options.replay !== 'pinned'
-    this.#clearScrollbackOnNextRender = true
     this.#reanchor = true
     this.#adoptPhysicalAfterTransient = false
   }
 
-  /** Put the cursor below the UI before terminal ownership is released. */
+  /** Start a fresh row-index space after presentation changes reflow finalized rows. */
+  startLayoutEpoch(): void {
+    this.startEpoch()
+  }
+
+  /** Put the cursor on a fresh line before terminal ownership is released. */
   finish(): void {
     const targetRow = Math.max(0, this.#height - 1)
     let out = ''
     if (this.#altActive) {
       out += EXIT_ALT_SCREEN
       this.#altActive = false
+      this.#altMutable = false
       this.#altScreen = this.#blankScreen()
     }
     if (!this.#cursorVisible) out += SHOW_CURSOR
-    out += csi(targetRow, 0)
-    if (out !== '') this.#sink.write(out)
+    out += csi(targetRow, 0) + '\r\n'
+    this.#sink.write(out)
     this.#cursorRow = targetRow
     this.#cursorCol = 0
     this.#cursorVisible = true
   }
 
+  /** Commit the latest finalized rows before terminal ownership is released. */
+  prepareForRelease(frame: Frame): void {
+    const liveStart = Math.max(0, Math.min(frame.liveStart ?? 0, frame.lines.length))
+    if (liveStart === 0) return
+    const stable = frame.lines.slice(0, liveStart)
+    const paint = this.#paintFollow(
+      stable,
+      stable.length,
+      false,
+      { row: stable.length, column: 0 },
+      false,
+    )
+    if (paint !== '') this.#sink.write(paint)
+  }
+
   /** Render a frame, appending only finalized rows during a stable geometry epoch. */
   render(frame: Frame): void {
-    const next = frame.lines.map(line => sanitizeDisplayLine(String(line)))
+    const next = frame.lines
     const liveStart = Math.max(0, Math.min(frame.liveStart ?? 0, next.length))
     const livePinned = frame.livePinned !== false
     const cursor = frame.cursor ?? { row: next.length, column: 0 }
     const cursorVisible = frame.cursorVisible !== false
     const paint = liveStart === 0
       ? this.#paintTransient(next, cursor, cursorVisible)
-      : this.#paintFollow(next, liveStart, livePinned, cursor, cursorVisible)
+      : livePinned && this.#alternateScreenMutable
+        ? this.#paintPinned(next, liveStart, cursor, cursorVisible)
+        : this.#paintFollow(next, liveStart, livePinned, cursor, cursorVisible)
     if (paint !== '') this.#sink.write(paint)
   }
 
@@ -172,13 +222,15 @@ export class MainScreenRenderer {
   ): string {
     const target = this.#target(next, 0, 'top')
     if (this.#alternateScreenOverlays) {
-      const clear = !this.#altActive || this.#resize !== undefined
+      const clear = !this.#altActive || this.#altGeometryDirty
       let body = this.#altActive ? '' : ENTER_ALT_SCREEN
       body += this.#paintScreen(target.rows, clear ? this.#blankScreen() : this.#altScreen, clear)
       const targetRow = this.#screenRow(cursor.row, target, next.length)
       body += csi(targetRow, cursor.column)
       body += cursorVisible ? SHOW_CURSOR : HIDE_CURSOR
       this.#altActive = true
+      this.#altMutable = false
+      this.#altGeometryDirty = false
       this.#altScreen = target.rows
       this.#cursorVisible = cursorVisible
       return this.#wrap(body)
@@ -190,6 +242,98 @@ export class MainScreenRenderer {
     return this.#finishPaint(body, target, next.length, cursor, cursorVisible)
   }
 
+  #paintPinned(
+    next: readonly string[],
+    liveStart: number,
+    cursor: { row: number; column: number },
+    cursorVisible: boolean,
+  ): string {
+    let body = ''
+    if (!this.#hasFrame || this.#newEpoch || this.#resize !== undefined || this.#stableChanged(next, liveStart)) {
+      const stable = next.slice(0, liveStart)
+      if (this.#altActive) {
+        body += EXIT_ALT_SCREEN
+        this.#altActive = false
+        this.#altMutable = false
+        this.#altScreen = this.#blankScreen()
+      }
+      body += !this.#hasFrame || this.#newEpoch
+        ? this.#preparePinnedEpoch(stable)
+        : this.#promotePinnedStable(stable)
+    }
+    const viewStart = Math.max(0, next.length - this.#height)
+    const target = this.#target(next, viewStart, 'bottom')
+    const clear = !this.#altActive || this.#altGeometryDirty
+    body += this.#altActive ? '' : ENTER_ALT_SCREEN
+    body += this.#paintScreen(target.rows, clear ? this.#blankScreen() : this.#altScreen, clear)
+    const targetRow = this.#screenRow(cursor.row, target, next.length)
+    body += csi(targetRow, cursor.column)
+    body += cursorVisible ? SHOW_CURSOR : HIDE_CURSOR
+    this.#altActive = true
+    this.#altMutable = true
+    this.#altGeometryDirty = false
+    this.#altScreen = target.rows
+    this.#cursorRow = targetRow
+    this.#cursorCol = cursor.column
+    this.#cursorVisible = cursorVisible
+    return this.#wrap(body)
+  }
+
+  #stableChanged(next: readonly string[], liveStart: number): boolean {
+    if (liveStart !== this.#frameLiveStart) return true
+    const start = Math.max(this.#physical, liveStart - this.#height)
+    for (let index = start; index < liveStart; index += 1) {
+      if (next[index] !== this.#frameLines[index]) return true
+    }
+    return false
+  }
+
+  #preparePinnedEpoch(stable: readonly string[]): string {
+    const viewStart = Math.max(0, stable.length - this.#height)
+    const preserveHost = this.#preserveHostScreen()
+    const epochPrefix = this.#newEpoch ? this.#epochPrefix() : []
+    const body = preserveHost
+      + this.#freezeRows(epochPrefix)
+      + this.#paintFlush(stable, 0, viewStart, viewStart, true)
+    this.#physical = viewStart
+    this.#screen = this.#target(stable, viewStart, 'bottom').rows
+    this.#frameLines = stable
+    this.#frameLiveStart = stable.length
+    this.#hasFrame = true
+    this.#newEpoch = false
+    this.#fullReplayOnNextEpoch = true
+    this.#resize = undefined
+    this.#reanchor = false
+    return body
+  }
+
+  #promotePinnedStable(stable: readonly string[]): string {
+    const viewStart = Math.max(0, stable.length - this.#height)
+    const target = this.#target(stable, viewStart, 'bottom')
+    let body = ''
+    if (this.#resize?.widthChanged === true) {
+      this.#resize = undefined
+      body = this.#paintFlush(stable, 0, viewStart, viewStart, true)
+      this.#physical = viewStart
+    } else {
+      if (this.#resize !== undefined) this.#adoptMainResizeBoundary()
+      if (stable.length <= this.#physical) {
+        body = this.#paintFlush(stable, 0, viewStart, viewStart, true)
+        this.#physical = viewStart
+      } else if (viewStart > this.#physical) {
+        body = this.#paintFlush(stable, this.#physical, viewStart, viewStart, false)
+        this.#physical = viewStart
+      } else {
+        body = this.#paintScreen(target.rows, this.#screen, true)
+      }
+    }
+    this.#screen = target.rows
+    this.#frameLines = stable
+    this.#frameLiveStart = stable.length
+    this.#reanchor = false
+    return body
+  }
+
   #paintFollow(
     next: readonly string[],
     liveStart: number,
@@ -198,8 +342,10 @@ export class MainScreenRenderer {
     cursorVisible: boolean,
   ): string {
     const exitAlt = this.#altActive ? EXIT_ALT_SCREEN : ''
+    const leavingMutable = this.#altActive && this.#altMutable
     if (this.#altActive) {
       this.#altActive = false
+      this.#altMutable = false
       this.#altScreen = this.#blankScreen()
     }
     const viewStart = Math.max(0, next.length - this.#height)
@@ -209,16 +355,32 @@ export class MainScreenRenderer {
     let body = ''
 
     if (!this.#hasFrame || this.#newEpoch) {
-      // An explicit replacement follows ED3, so it must rebuild the complete
-      // logical frame. Durable logs can end with an orphaned streaming/tool
-      // block; applying the ordinary pending seam here would silently omit its
-      // off-screen middle from the restored transcript.
+      const preserveHost = this.#preserveHostScreen()
+      const epochPrefix = this.#newEpoch ? this.#epochPrefix() : []
       const replayPhysical = this.#newEpoch && this.#fullReplayOnNextEpoch ? viewStart : candidatePhysical
-      body = this.#paintFlush(next, 0, replayPhysical, viewStart, true)
+      body = preserveHost
+        + this.#freezeRows(epochPrefix)
+        + this.#paintFlush(next, 0, replayPhysical, viewStart, true)
       this.#physical = replayPhysical
       this.#newEpoch = false
       this.#fullReplayOnNextEpoch = true
       this.#resize = undefined
+    } else if (leavingMutable) {
+      const widthChanged = this.#resize?.widthChanged === true
+      if (widthChanged) {
+        this.#resize = undefined
+        body = this.#paintFlush(next, 0, viewStart, viewStart, true)
+        this.#physical = viewStart
+      } else {
+        if (this.#resize !== undefined) this.#adoptMainResizeBoundary()
+        if (candidatePhysical > this.#physical) {
+          body = this.#paintFlush(next, this.#physical, candidatePhysical, viewStart, true)
+          this.#physical = candidatePhysical
+        } else {
+          body = this.#paintScreen(target.rows, this.#screen, true)
+        }
+      }
+      this.#reanchor = false
     } else if (this.#resize !== undefined) {
       const transition = this.#resize
       const baseline = this.#resizedScreen(transition.oldHeight)
@@ -270,7 +432,41 @@ export class MainScreenRenderer {
     }
 
     this.#transient = false
+    this.#frameLines = next
+    this.#frameLiveStart = liveStart
     return this.#finishPaint(exitAlt + body, target, next.length, cursor, cursorVisible)
+  }
+
+  #preserveHostScreen(): string {
+    const preserve = this.#preserveScreenOnNextRender || (!this.#hasFrame && this.#preserveInitialScreen)
+    this.#preserveScreenOnNextRender = false
+    return preserve ? csi(this.#height - 1, 0) + '\r\n'.repeat(this.#height) : ''
+  }
+
+  #epochPrefix(): string[] {
+    if (this.#resize !== undefined) this.#adoptMainResizeBoundary()
+    const end = Math.max(this.#physical, Math.min(this.#frameLiveStart, this.#frameLines.length))
+    return this.#frameLines.slice(this.#physical, end).map(line => sanitizeDisplayLine(String(line)))
+  }
+
+  #adoptMainResizeBoundary(): void {
+    const transition = this.#resize
+    if (transition === undefined) return
+    this.#screen = transition.widthChanged ? this.#blankScreen() : this.#resizedScreen(transition.oldHeight)
+    this.#physical = Math.max(0, this.#frameLines.length - this.#height)
+    this.#resize = undefined
+  }
+
+  #freezeRows(rows: readonly string[]): string {
+    if (rows.length === 0) return ''
+    const frozen = rows.map(line => sanitizeDisplayLine(String(line)))
+    const tape = [...frozen, ...this.#blankScreen()]
+    let out = CLEAR_SCREEN
+    for (let index = 0; index < tape.length; index += 1) {
+      if (index > 0) out += '\r\n'
+      out += CLEAR_LINE + (tape[index] ?? '')
+    }
+    return out
   }
 
   /** Emit finalized rows followed by the bounded live tail. */
@@ -280,10 +476,12 @@ export class MainScreenRenderer {
     committedEnd: number,
     viewStart: number,
     clearScreen: boolean,
+    prefix: readonly string[] = [],
   ): string {
     const rows = [
-      ...next.slice(start, committedEnd),
-      ...next.slice(viewStart, viewStart + this.#height),
+      ...prefix,
+      ...next.slice(start, committedEnd).map(line => sanitizeDisplayLine(String(line))),
+      ...next.slice(viewStart, viewStart + this.#height).map(line => sanitizeDisplayLine(String(line))),
     ]
     let out = clearScreen ? CLEAR_SCREEN : csi(0, 0)
     if (rows.length < this.#height) out += csi(this.#height - rows.length, 0)
@@ -329,7 +527,7 @@ export class MainScreenRenderer {
   }
 
   #target(next: readonly string[], start: number, anchor: 'top' | 'bottom'): ScreenTarget {
-    const content = next.slice(start, start + this.#height).map(line => line ?? '')
+    const content = next.slice(start, start + this.#height).map(line => sanitizeDisplayLine(String(line ?? '')))
     const offset = anchor === 'bottom' ? Math.max(0, this.#height - content.length) : 0
     const rows = this.#blankScreen()
     for (let i = 0; i < content.length; i += 1) rows[offset + i] = content[i] ?? ''
@@ -370,14 +568,12 @@ export class MainScreenRenderer {
     const visibilityChanged = cursorVisible !== this.#cursorVisible
     const cursorOut = body !== '' || moved || visibilityChanged ? csi(targetRow, targetCol) : ''
 
-    const clearScrollback = this.#clearScrollbackOnNextRender && this.#canClearScrollback
-    this.#clearScrollbackOnNextRender = false
     this.#cursorRow = targetRow
     this.#cursorCol = targetCol
     this.#cursorVisible = cursorVisible
     this.#screen = target.rows
     this.#hasFrame = true
-    return this.#wrap((clearScrollback ? CLEAR_SCROLLBACK : '') + body + cursorOut + hide + show)
+    return this.#wrap(body + cursorOut + hide + show)
   }
 
   #screenRow(logicalRow: number, target: ScreenTarget, length: number): number {

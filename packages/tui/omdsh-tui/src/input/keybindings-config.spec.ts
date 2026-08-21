@@ -8,6 +8,7 @@ describe('loadKeybindings', () => {
   it('ships the pi-style Ctrl+G binding for the external editor', () => {
     const bindings = loadKeybindings(undefined)
     expect(bindings['ctrl+g']).toBe('external-editor')
+    expect(bindings['alt+a']).toBe('inspect-subagent')
     expect(bindings['ctrl+x']).toBeUndefined()
   })
 

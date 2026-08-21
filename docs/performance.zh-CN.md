@@ -50,7 +50,7 @@ oh-my-dsh 将响应速度视为终端架构的一部分，而不是开发结束�
 
 ### 原生 scrollback 与终端差分输出
 
-在跟随模式下，`MainScreenRenderer` 追加已最终化的行，并对可变视口执行行级差分。物理边界可防止已最终化行在终端尺寸稳定的 epoch 内被重复写入。仅追加的 assistant stream 在头部离开屏幕时可以推进该边界，从而保留终端的自然滚动；running-tool preview 因早期行可能折叠或变化而继续固定。普通更新期间，原生 scrollback 保持为追加式冻结视觉记录。生产启动只输出一个初始 session frame。idle replacement 会完整重放，running replacement 只把可变 preview 区域固定到完成为止。`ED3` 与 alternate-screen overlay 仅用于 direct terminal；multiplexer 与 ConPTY 保留宿主 scrollback，multiplexer 的 resize 突发会在重绘前合并。大型 resume transcript 会完整重放而不是截断。在终端宽度稳定时，已最终化行也构成 prepared prefix：frame fitting 只校验可变后缀，不会因 streaming、状态或 composer 更新而再次测量完整 transcript。
+在跟随模式下，`MainScreenRenderer` 追加已最终化的行，并对可变视口执行行级差分。物理边界可防止已最终化行在终端尺寸稳定的 epoch 内被重复写入。流式 assistant Markdown 和 running-tool preview 会留在 alternate buffer，直到完成后才提交，因为后续输入或终端 resize 都可能改变更早的行。只有已完成内容会进入原生 scrollback；启动、session replacement 和 `/clear` 都不会清除该追加式冻结视觉记录。生产启动只输出一个初始 session frame，replacement 会仅清理可见屏幕后开始新的视觉 epoch 并重放最终内容。resize 时会立即更新 Renderer 尺寸，multiplexer 的重绘突发仍会合并。大型 resume transcript 会完整重放而不是截断。在终端宽度稳定时，已最终化行也构成 prepared prefix：frame fitting 只校验可变后缀，不会因 streaming、状态或 composer 更新而再次测量完整 transcript。
 
 每个帧都会按可见行与上一帧比较。终端写入器只重写发生变化的行，只清理失效的旧行，并保持目标光标位置。所有宽度都按终端显示单元计算，因此 ANSI 样式、中文、Emoji 和组合字符不会因为布局错误触发额外的修正绘制。
 

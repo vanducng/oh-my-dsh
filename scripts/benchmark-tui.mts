@@ -179,7 +179,7 @@ const terminalRenderer = new MainScreenRenderer(
       terminalBytes += Buffer.byteLength(chunk)
     },
   },
-  { width: 160, height: 50, synchronized: false },
+  { width: 160, height: 50, synchronized: false, alternateScreenMutable: true },
 )
 terminalRenderer.render(renderView(largeTranscript, {
   width: 160,

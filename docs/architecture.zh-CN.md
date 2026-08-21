@@ -81,7 +81,7 @@ Skills 与 MCP 的部署细节见 [`skills-and-mcp.zh-CN.md`](skills-and-mcp.zh-
 
 - 布局以终端显示单元格为准，正确处理 ANSI 序列、CJK 文本、emoji、组合字符和不可断行的长内容。
 - Composer 和两行状态 Footer 固定在底部，Transcript Viewport 可以独立滚动。
-- `MainScreenRenderer` 在普通更新期间将终端原生 scrollback 作为追加式冻结视觉记录。在终端尺寸稳定时，已最终化的行会在离开实时屏幕前以最终内容重写。仅追加的 assistant reasoning 和 text 不固定在 viewport，其滚出屏幕的头部会进入原生历史，让 viewport 自然跟随实时尾部；可变的 running-tool preview 则固定到完成为止。生产启动会等待初始 session projection，不再先绘制临时 Header。idle session replacement 会完整重放逻辑帧；running replacement 只重放已稳定前缀，并仅固定可变 preview 区域。direct terminal 可在权威替换时使用 `ED3`，并为临时全屏界面借用 alternate screen。multiplexer 与 ConPTY 会保留宿主 scrollback，multiplexer 的 resize 突发会先合并再重新锚定。Renderer 不启用 1000/1006 鼠标跟踪，并将每帧包在一次 DEC 2026 同步写入中。
+- `MainScreenRenderer` 将终端原生 scrollback 作为追加式冻结视觉记录，并且绝不清除宿主历史。在终端尺寸稳定时，已最终化的行会在离开实时屏幕前以最终内容重写。流式 assistant Markdown 和 running-tool preview 会留在 alternate buffer，直到完成后才提交，因此增长或 resize 都不会把临时或过期行写入原生历史。生产启动会等待初始 session projection，不再先绘制临时 Header。session replacement 与 `/clear` 使用 `ED2` 开始非破坏性视觉 epoch，在保留既有 shell 与 session 历史的同时重放最终内容。resize 时会立即更新 Renderer 尺寸；multiplexer 的重绘突发仍会合并，确保不会使用不一致的尺寸绘制。Renderer 不启用 1000/1006 鼠标跟踪，并将每帧包在一次 DEC 2026 同步写入中。
 - 已完成的 Transcript 布局会被缓存，Renderer 只输出发生变化的行，而不重绘整个屏幕。
 - Modal Selector 在交互结束前独占输入和光标可见性，结束后恢复 Composer。
 - 第一次 Ctrl-C 清空输入或中断任务，第二次 Ctrl-C 退出。Ctrl-D 直接退出；存在持久会话时会输出 `omdsh --resume <session-id>` 提示。

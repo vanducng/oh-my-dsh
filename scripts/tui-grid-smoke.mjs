@@ -9,15 +9,15 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { startMockLlmServer } from '@deepseek-ai/dsh-llm-mock-server'
 import { materializeDotfilesHome, recordDotfilesTrace, redactSecrets } from './tui-grid-dotfiles.mjs'
 import { compareSnapshot, gridFrom, lastRows, normalizeGrid, REPO_ROOT, spawnGridSession } from './tui-grid.mjs'
 
-const workspace = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-ws-'))
-const home = mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-home-'))
+const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-ws-')))
+const home = realpathSync(mkdtempSync(join(tmpdir(), 'omdsh-tui-grid-home-')))
 const editorMarker = join(home, 'editor-invoked')
 process.on('exit', () => {
   rmSync(workspace, { recursive: true, force: true })
@@ -49,7 +49,9 @@ const server = await startMockLlmServer({
 
 const childEnv = {
   ...process.env,
+  HOME: dirname(workspace),
   OMDSH_HOME: home,
+  DSH_HOME: home,
   DEEPSEEK_BASE_URL: 'http://127.0.0.1:18123/v1',
   DEEPSEEK_API_KEY: 'sk-mock',
   NO_COLOR: '1',
@@ -59,7 +61,7 @@ const childEnv = {
 }
 
 const session = spawnGridSession({ cwd: workspace, env: childEnv })
-const replacements = { $WORKSPACE: workspace, $HOME: home }
+const replacements = { $WORKSPACE: `~/${basename(workspace)}`, $HOME: home }
 let failed = false
 
 function screenTokens(text, tokens) {
@@ -70,7 +72,9 @@ function screenTokens(text, tokens) {
 }
 
 function snapshot(name, text) {
-  const result = compareSnapshot(name, normalizeGrid(text, replacements))
+  const normalized = normalizeGrid(text, replacements)
+    .replace(/( · (?:code|both)) +(\$WORKSPACE · main)/gu, '$1   $2')
+  const result = compareSnapshot(name, normalized)
   if (result.updated) {
     console.log(`SNAPSHOT_UPDATED ${name}`)
     return
@@ -90,7 +94,10 @@ function snapshot(name, text) {
 
 try {
   const boot = await session.waitFor(
-    (text) => text.includes('Into the Unknown') && /deepseek-v4-flash · (?:off|low|high|max)/u.test(text) && text.includes('🐳'),
+    (text) => text.includes('Into the Unknown')
+      && /│\s+high\s+│/u.test(text)
+      && /deepseek-v4-flash(?: · high)? · ptc · code/u.test(text)
+      && text.includes('🐳'),
     'boot header, model footer, and composer',
   )
   screenTokens(boot, ['Into the Unknown', '🐳'])

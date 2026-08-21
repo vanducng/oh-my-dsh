@@ -554,13 +554,26 @@ export class SessionRuntime {
     return true
   }
 
-  async start(): Promise<void> {
+  async start(options: { resumeId?: string; signal?: AbortSignal } = {}): Promise<void> {
     if (this.#started) return
     this.#started = true
-    const defaults = this.#ctx.get('agentDefaultModel')?.currentSelection()
-    if (defaults === undefined) throw new Error('agent default model is unavailable')
-    await this.#activate(await this.#create(defaults))
-    await this.refreshRecent()
+    const signal = options.signal
+    try {
+      signal?.throwIfAborted()
+      const defaults = this.#ctx.get('agentDefaultModel')?.currentSelection()
+      if (defaults === undefined) throw new Error('agent default model is unavailable')
+      const next = options.resumeId === undefined
+        ? await this.#create(defaults)
+        : await this.#resume(defaults, options.resumeId, signal ?? new AbortController().signal)
+      signal?.throwIfAborted()
+      await this.#activate(next, signal)
+      signal?.throwIfAborted()
+      await this.refreshRecent()
+      signal?.throwIfAborted()
+    } catch (error: unknown) {
+      this.#started = false
+      throw error
+    }
   }
 
   /** Submit one human composer value; active turns retain it as a later follow-up. */
@@ -678,33 +691,7 @@ export class SessionRuntime {
   /** Replace the active top-level session with one durable session. */
   async resumeSession(agent: Agent, id: string, signal: AbortSignal): Promise<void> {
     this.assertActive(agent)
-    const selection = this.selection(agent)
-    const ref: ModelSelectionRef = { current: selection, assembled: undefined }
-    let configured: ConfiguredAgentContext | undefined
-    const handle = await this.#ctx.agents.resume({
-      resumeSessionId: SessionId(id),
-      agentOptions: { provider: selection.provider, model: selection.model },
-      signal,
-      setup: async (agentCtx) => { configured = await setupAgentContext(agentCtx, ref) },
-    })
-    const configuration = configured
-    if (configuration === undefined) {
-      await handle.dispose()
-      throw new Error('resumed agent was published without session configuration')
-    }
-    this.#pinToolPresentation(handle.agent, configuration)
-    await this.#activate({
-      handle,
-      selection: ref,
-      contextWindow: undefined,
-      reasoningEffort: undefined,
-      configuration: {
-        agentPreset: configuration.agentPreset,
-        tools: configuration.tools,
-        toolsSource: configuration.toolsSource,
-      },
-      disposeToolPresentation: configuration.disposeToolPresentation,
-    })
+    await this.#activate(await this.#resume(this.selection(agent), id, signal))
     await this.refreshRecent()
   }
 
@@ -977,6 +964,35 @@ export class SessionRuntime {
     }
   }
 
+  async #resume(selection: ModelSelection, id: string, signal: AbortSignal): Promise<ActiveSession> {
+    const ref: ModelSelectionRef = { current: selection, assembled: undefined }
+    let configured: ConfiguredAgentContext | undefined
+    const handle = await this.#ctx.agents.resume({
+      resumeSessionId: SessionId(id),
+      agentOptions: { provider: selection.provider, model: selection.model },
+      signal,
+      setup: async (agentCtx) => { configured = await setupAgentContext(agentCtx, ref) },
+    })
+    const configuration = configured
+    if (configuration === undefined) {
+      await handle.dispose()
+      throw new Error('resumed agent was published without session configuration')
+    }
+    this.#pinToolPresentation(handle.agent, configuration)
+    return {
+      handle,
+      selection: ref,
+      contextWindow: undefined,
+      reasoningEffort: undefined,
+      configuration: {
+        agentPreset: configuration.agentPreset,
+        tools: configuration.tools,
+        toolsSource: configuration.toolsSource,
+      },
+      disposeToolPresentation: configuration.disposeToolPresentation,
+    }
+  }
+
   async #resolveModelInfo(selection: ModelSelection): Promise<LlmResolvedModelInfo | undefined> {
     try {
       return await this.#ctx.get('llm')?.resolveModelInfo(selection.provider, selection.model)
@@ -985,7 +1001,8 @@ export class SessionRuntime {
     }
   }
 
-  async #activate(next: ActiveSession): Promise<void> {
+  async #activate(next: ActiveSession, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
     const previous = this.#active
     this.#active = next
     const agent = next.handle.agent
@@ -993,16 +1010,19 @@ export class SessionRuntime {
     this.#tui.setInspectedSubagent(undefined)
     this.#tui.setStatus(agent.status)
     this.#syncSubagents()
-    this.#replaceTranscript(agent)
+    if (previous !== undefined) this.#replaceTranscript(agent)
     this.#pushTools()
     const selected = this.selection(agent)
     const info = await this.#resolveModelInfo(selected)
+    signal?.throwIfAborted()
     next.contextWindow = info?.context?.contextWindow
     const status = modelStatus(selected, info)
     next.reasoningEffort = status.reasoningEffort
     this.#tui.setModel(status.model, status.reasoningEffort)
     await this.#refreshSkills()
+    signal?.throwIfAborted()
     this.#pushSessionInfo()
+    if (previous === undefined) this.#replaceTranscript(agent)
     if (previous !== undefined) this.#retired.push(previous.handle)
   }
 

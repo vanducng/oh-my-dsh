@@ -85,6 +85,7 @@ import {
   initialTranscript,
   replayEvents,
   renderView,
+  settleIdleTranscript,
   TRANSCRIPT_FAST_SCROLL,
   type Block,
   type TranscriptState,
@@ -240,6 +241,7 @@ export class LocalTui implements TuiService {
   #plainPrinted = 0
   #offData: (() => void) | null = null
   #offResize: (() => void) | null = null
+  #offContinue: (() => void) | null = null
   #pwd: string
   #branch: string | undefined
   #spinner = 0
@@ -271,6 +273,7 @@ export class LocalTui implements TuiService {
   #promptDocument: { start: number; maxStart: number; pageSize: number } | undefined
   readonly #trueColor: boolean
   readonly #copy: ClipboardWriter
+  readonly #editExternally: (text: string) => string
   readonly #readClipboard: ClipboardReader
   readonly #readClipboardImage: ClipboardImageReader
   readonly #readClipboardFiles: ClipboardFileReader
@@ -317,9 +320,11 @@ export class LocalTui implements TuiService {
       readClipboardImage?: ClipboardImageReader
       readClipboardFiles?: ClipboardFileReader
       readImagePath?: ImagePathReader
+      editExternally?: (text: string) => string
       deferInitialRender?: boolean
       terminalProfile?: 'direct' | 'multiplexer' | 'conpty'
       alternateScreenOverlays?: boolean
+      preserveInitialScreen?: boolean
       resizeDebounceMs?: number
       streamRenderMs?: number
     } = {},
@@ -329,6 +334,7 @@ export class LocalTui implements TuiService {
     this.#colors = colors
     this.#themeName = themeName
     this.#copy = copy
+    this.#editExternally = paths.editExternally ?? editExternally
     this.#readClipboard = paths.readClipboard ?? readFromClipboard
     this.#readClipboardImage = paths.readClipboardImage ?? readImageFromClipboard
     this.#readClipboardFiles = paths.readClipboardFiles ?? readMacClipboardFiles
@@ -361,8 +367,9 @@ export class LocalTui implements TuiService {
         width: this.#term.width(),
         height: this.#term.height(),
         synchronized: this.#tty,
-        clearScrollback: this.#terminalProfile === 'direct',
         alternateScreenOverlays: paths.alternateScreenOverlays === true,
+        alternateScreenMutable: true,
+        preserveInitialScreen: paths.preserveInitialScreen === true,
       },
     )
     if (this.#tty) {
@@ -372,11 +379,9 @@ export class LocalTui implements TuiService {
       term.input.on('data', listener)
       this.#offData = () => { term.input.off('data', listener) }
       this.#offResize = term.onResize?.(() => {
-        // A terminal resize changes the committed/live seam; re-anchor the
-        // live window so it stays anchored at the bottom.
+        this.#renderer.resize(this.#term.width(), this.#term.height())
         const repaint = (): void => {
           this.#resizeTimer = null
-          this.#renderer.resize(this.#term.width(), this.#term.height())
           this.#render()
         }
         if (this.#terminalProfile === 'multiplexer') {
@@ -386,6 +391,13 @@ export class LocalTui implements TuiService {
           repaint()
         }
       }) ?? null
+      if (process.platform !== 'win32') {
+        const onContinue = (): void => {
+          if (!this.#disposed) this.#restoreTerminalOwnership()
+        }
+        process.on('SIGCONT', onContinue)
+        this.#offContinue = () => { process.removeListener('SIGCONT', onContinue) }
+      }
       term.output.write('\x1b[?2004h')
     }
     this.#render()
@@ -540,8 +552,10 @@ export class LocalTui implements TuiService {
     presentations?: ReadonlyMap<number, TuiToolPresentation>,
     status: TuiStatus = 'idle',
   ): void {
-    const state = replayEvents(events, presentations)
-    this.#state = { ...state, status, compactCommandId: undefined }
+    const replayed = replayEvents(events, presentations)
+    this.#state = status === 'idle'
+      ? settleIdleTranscript(replayed)
+      : { ...replayed, status, compactCommandId: undefined }
     this.#plainPrinted = 0
     this.#followTail()
     this.#deferInitialRender = false
@@ -565,11 +579,12 @@ export class LocalTui implements TuiService {
           ...info.controls,
           ...(info.controls.plan === undefined ? {} : { plan: { ...info.controls.plan } }),
         }
-    if (this.#tty) this.#render()
+    if (this.#tty && this.#streamRenderTimer === null) this.#render()
   }
 
   /** Apply prefs loaded from the settings document (does not persist). */
   applyStoredPrefs(prefs: TuiPrefs): void {
+    const expandChanged = prefs.expandTools !== this.#toolsExpanded
     this.#themeName = prefs.theme
     this.#colors = prefs.colors
     this.#expandTools = prefs.expandTools
@@ -577,6 +592,7 @@ export class LocalTui implements TuiService {
     this.#startupChangelog = prefs.startupChangelog ?? 'summary'
     this.#statusBar = resolveStatusBarConfig(prefs.statusBar, prefs.statusPreset)
     this.#toolsExpanded = prefs.expandTools
+    if (expandChanged) this.#renderer.startLayoutEpoch()
     if (this.#settings !== null) this.#settings = { ...this.#settings, prefs }
     if (this.#tty) this.#render()
   }
@@ -714,12 +730,12 @@ export class LocalTui implements TuiService {
     if (this.#tty) {
       this.#offData?.()
       this.#offResize?.()
-      this.#term.input.setRawMode?.(false)
+      this.#offContinue?.()
+      this.#offContinue = null
       // Leave the cursor on a fresh line below the last frame so the shell
       // prompt does not overwrite the transcript. Disable bracketed paste
       // and restore the cursor.
-      this.#renderer.finish()
-      this.#term.output.write('\x1b[?2004l\x1b[?25h\r\n')
+      this.#releaseTerminalOwnership()
       if (this.#resumeHintRequested && this.#sessionId !== undefined) {
         this.#term.output.write(`\r\nResume this session with ${APP_NAME} --resume ${this.#sessionId}\r\n`)
       }
@@ -833,57 +849,59 @@ export class LocalTui implements TuiService {
     }
   }
 
+  #viewFrame(release = false) {
+    return renderView(this.#state, {
+      width: this.#term.width(),
+      height: this.#term.height(),
+      model: this.#model,
+      ...(this.#reasoningEffort === undefined ? {} : { reasoningEffort: this.#reasoningEffort }),
+      input: this.#editor.text,
+      inputCursor: this.#editor.cursor,
+      inputImages: this.#images.length,
+      queuedSubmissions: this.#queueEditNewer === null
+        ? this.#queuedSubmissions
+        : [...this.#queuedSubmissions, ...this.#queueEditNewer],
+      colors: this.#colors,
+      pwd: this.#pwd,
+      ...(this.#branch !== undefined ? { branch: this.#branch } : {}),
+      version: APP_VERSION,
+      appName: APP_NAME,
+      spinnerFrame: this.#spinner,
+      trueColor: this.#trueColor,
+      themeName: this.#themeName,
+      scrollStart: release || this.#follow ? Number.POSITIVE_INFINITY : this.#scrollStart,
+      ...(!release && this.#focusBlock !== undefined ? { focusBlock: this.#focusBlock } : {}),
+      toolsExpanded: this.#toolsExpanded,
+      expandedTools: this.#expandedToolCalls,
+      commands: this.#commands(),
+      recentSessions: this.#recentSessions,
+      welcomeTips: this.#welcomeTips,
+      ...(this.#sessionStats === undefined ? {} : { sessionStats: this.#sessionStats }),
+      ...(this.#sessionControls === undefined ? {} : { sessionControls: this.#sessionControls }),
+      ...(this.#loopStatus === undefined ? {} : { loopStatus: this.#loopStatus }),
+      ...(this.#subagents === undefined ? {} : { subagents: this.#subagents }),
+      subagentLauncherFocused: this.#subagentLauncherFocused,
+      ...(this.#inspected === undefined ? {} : { inspected: this.#inspected }),
+      statusBar: this.#statusBar,
+      ...(!release && this.#prompt !== null ? { promptSelector: this.#prompt } : {}),
+      ...(!release && this.#settings !== null
+        ? { settings: this.#settings }
+        : !release && this.#copySelector !== null
+          ? { copySelector: this.#copySelector }
+          : !release && this.#search !== null
+            ? { historySearch: this.#search }
+            : !release && this.#ac !== null ? { autocomplete: this.#ac } : {}),
+    })
+  }
+
   #render(): void {
+    if (this.#resizeTimer !== null) return
     if (this.#streamRenderTimer !== null) {
       clearTimeout(this.#streamRenderTimer)
       this.#streamRenderTimer = null
     }
     if (this.#deferInitialRender) return
-    const width = this.#term.width()
-    const frame = this.#tty
-      ? renderView(this.#state, {
-        width,
-        height: this.#term.height(),
-        model: this.#model,
-        ...(this.#reasoningEffort === undefined ? {} : { reasoningEffort: this.#reasoningEffort }),
-        input: this.#editor.text,
-        inputCursor: this.#editor.cursor,
-        inputImages: this.#images.length,
-        queuedSubmissions: this.#queueEditNewer === null
-          ? this.#queuedSubmissions
-          : [...this.#queuedSubmissions, ...this.#queueEditNewer],
-        colors: this.#colors,
-        pwd: this.#pwd,
-        ...(this.#branch !== undefined ? { branch: this.#branch } : {}),
-        version: APP_VERSION,
-        appName: APP_NAME,
-        spinnerFrame: this.#spinner,
-        trueColor: this.#trueColor,
-        themeName: this.#themeName,
-        scrollStart: this.#follow ? Number.POSITIVE_INFINITY : this.#scrollStart,
-        ...(this.#focusBlock === undefined ? {} : { focusBlock: this.#focusBlock }),
-        toolsExpanded: this.#toolsExpanded,
-        expandedTools: this.#expandedToolCalls,
-        commands: this.#commands(),
-        recentSessions: this.#recentSessions,
-        welcomeTips: this.#welcomeTips,
-        ...(this.#sessionStats === undefined ? {} : { sessionStats: this.#sessionStats }),
-        ...(this.#sessionControls === undefined ? {} : { sessionControls: this.#sessionControls }),
-        ...(this.#loopStatus === undefined ? {} : { loopStatus: this.#loopStatus }),
-        ...(this.#subagents === undefined ? {} : { subagents: this.#subagents }),
-        subagentLauncherFocused: this.#subagentLauncherFocused,
-        ...(this.#inspected === undefined ? {} : { inspected: this.#inspected }),
-        statusBar: this.#statusBar,
-        ...(this.#prompt === null ? {} : { promptSelector: this.#prompt }),
-        ...(this.#settings !== null
-          ? { settings: this.#settings }
-          : this.#copySelector !== null
-            ? { copySelector: this.#copySelector }
-            : this.#search !== null
-              ? { historySearch: this.#search }
-              : this.#ac !== null ? { autocomplete: this.#ac } : {}),
-      })
-      : { lines: [] }
+    const frame = this.#tty ? this.#viewFrame() : { lines: [] }
     this.#focusBlock = undefined
     this.#promptDocument = frame.promptDocument
     this.#syncScroll(frame.transcript)
@@ -1305,6 +1323,7 @@ export class LocalTui implements TuiService {
         } else {
           this.#toolsExpanded = !this.#toolsExpanded
         }
+        this.#renderer.startLayoutEpoch()
         this.#render()
         return
       }
@@ -1553,7 +1572,10 @@ export class LocalTui implements TuiService {
     this.#checkUpdates = prefs.checkUpdates ?? true
     this.#startupChangelog = prefs.startupChangelog ?? 'summary'
     this.#statusBar = resolveStatusBarConfig(prefs.statusBar, prefs.statusPreset)
-    if (expandChanged) this.#toolsExpanded = prefs.expandTools
+    if (expandChanged) {
+      this.#toolsExpanded = prefs.expandTools
+      this.#renderer.startLayoutEpoch()
+    }
     this.#persistPrefs?.(prefs)
   }
 
@@ -1847,7 +1869,8 @@ export class LocalTui implements TuiService {
     }
     if (command.kind === 'suspend') {
       if (process.platform !== 'win32') {
-        try { process.kill(process.pid, 'SIGTSTP') } catch { /* no controlling tty */ }
+        this.#releaseTerminalOwnership()
+        try { process.kill(process.pid, 'SIGTSTP') } catch { this.#restoreTerminalOwnership() }
       }
       return
     }
@@ -2190,19 +2213,34 @@ export class LocalTui implements TuiService {
       this.#startAsyncPaste(this.#pasteClipboard())
       return
     }
+    this.#releaseTerminalOwnership()
+    let editorError: string | undefined
     try {
-      this.#term.input.setRawMode?.(false)
-      const text = editExternally(this.#editor.text)
+      const text = this.#editExternally(this.#editor.text)
       this.#editor.setText(text)
       this.#reconcileImageDrafts()
     } catch (error: unknown) {
-      this.notice(error instanceof Error ? error.message : String(error), { level: 'error' })
+      editorError = error instanceof Error ? error.message : String(error)
     } finally {
-      this.#term.input.setRawMode?.(true)
-      this.#renderer.reset()
       this.#refreshAutocomplete()
-      this.#render()
+      this.#restoreTerminalOwnership()
     }
+    if (editorError !== undefined) this.notice(editorError, { level: 'error' })
+  }
+
+  #releaseTerminalOwnership(): void {
+    if (!this.#deferInitialRender) this.#renderer.prepareForRelease(this.#viewFrame(true))
+    this.#term.input.setRawMode?.(false)
+    this.#renderer.finish()
+    this.#term.output.write('\x1b[?2004l\x1b[?25h')
+  }
+
+  #restoreTerminalOwnership(): void {
+    this.#term.input.setRawMode?.(true)
+    this.#term.output.write('\x1b[?2004h')
+    this.#renderer.resize(this.#term.width(), this.#term.height())
+    this.#renderer.reacquire()
+    this.#render()
   }
 }
 
@@ -2234,6 +2272,7 @@ export function apply(ctx: Context, config: Config): void {
       deferInitialRender: true,
       terminalProfile,
       alternateScreenOverlays: terminalProfile === 'direct',
+      preserveInitialScreen: true,
       historyPath: config.historyPath ?? join(dshHome, 'omdsh', 'history.jsonl'),
       keybindingsPath: config.keybindingsPath ?? join(dshHome, 'omdsh', 'keybindings.json'),
     },

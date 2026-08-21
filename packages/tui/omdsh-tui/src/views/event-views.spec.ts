@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { CallId } from '@deepseek-ai/dsh-llm'
-import { applyEvent, blockLines, initialTranscript, renderInspectBanner, renderQueuedSubmissions, renderSubagents, renderTodos, renderView, replayEvents, TOOL_COLLAPSED_LINES, windowTranscript } from './event-views.ts'
+import { applyEvent, blockLines, initialTranscript, renderInspectBanner, renderQueuedSubmissions, renderSubagents, renderTodos, renderView, replayEvents, settleIdleTranscript, TOOL_COLLAPSED_LINES, windowTranscript } from './event-views.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createTheme, SPINNER, SYMBOL } from '../chrome/theme.ts'
 import { stripAnsi, visibleWidth } from '../chrome/width.ts'
@@ -179,6 +179,39 @@ describe('applyEvent', () => {
     state = applyEvent(state, ev('turn/start', { turn: 1 }, 1))
     state = applyEvent(state, ev('turn/end', { turn: 1, reason: { kind: 'aborted' } }, 2))
     expect(state.blocks).toEqual([{ kind: 'notice', level: 'info', text: 'interrupted' }])
+  })
+
+  it('settles running tools when a turn ends without a result', () => {
+    let state = initialTranscript()
+    state = applyEvent(state, ev('turn/start', { turn: 1 }, 1))
+    state = applyEvent(state, ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{}' }, 2))
+    state = applyEvent(state, ev('turn/end', { turn: 1, reason: { kind: 'aborted' } }, 3))
+
+    expect(state.status).toBe('idle')
+    expect(state.blocks).toContainEqual(expect.objectContaining({
+      kind: 'tool',
+      callId: 'call-1',
+      status: 'error',
+      output: 'interrupted before a result',
+    }))
+    expect(view(state).livePinned).toBe(false)
+  })
+
+  it('settles orphaned durable tails before idle replay', () => {
+    let state = initialTranscript()
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', text: 'delivered prefix' },
+    }, 1))
+    state = applyEvent(state, ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{}' }, 2))
+
+    const settled = settleIdleTranscript(state)
+    expect(settled.blocks).toEqual([
+      { kind: 'assistant', turn: 1, step: 1, text: 'delivered prefix', reasoning: '', streaming: false, interrupted: true },
+      { kind: 'tool', callId: 'call-1', name: 'bash', args: '{}', status: 'error', output: 'interrupted before a result' },
+    ])
+    expect(view(settled).livePinned).toBe(false)
   })
 
   it('tracks tool calls to ok and error results', () => {
@@ -894,18 +927,33 @@ describe('renderView', () => {
     expect(frame.transcript?.hiddenBelow).toBe(0)
   })
 
-  it('pins running tools but lets an append-only assistant stream scroll naturally', () => {
+  it('pins all pending assistant and tool surfaces', () => {
     const assistant = applyEvent(
       initialTranscript(),
       ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: 'thinking' } }, 1),
     )
-    expect(view(assistant).livePinned).toBe(false)
+    expect(view(assistant).livePinned).toBe(true)
 
     const tool = applyEvent(
       initialTranscript(),
       ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{}' }, 1),
     )
     expect(view(tool).livePinned).toBe(true)
+  })
+
+  it('pins an oversized multiline composer in a short terminal', () => {
+    const input = Array.from({ length: 20 }, (_, index) => `draft line ${index}`).join('\n')
+    const frame = renderView(initialTranscript(), {
+      width: 30,
+      height: 8,
+      model: 'deepseek-v4-flash',
+      input,
+      inputCursor: input.length,
+      colors: false,
+    })
+
+    expect(frame.lines.length).toBeGreaterThan(8)
+    expect(frame.livePinned).toBe(true)
   })
 
   it('keeps a windowed transcript inside the terminal height with a scroll indicator', () => {

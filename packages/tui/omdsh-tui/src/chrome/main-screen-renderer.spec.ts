@@ -23,9 +23,13 @@ class Emulator {
   captured = ''
   writeCount = 0
 
-  constructor(height: number, initialScrollback: readonly string[] = []) {
+  constructor(
+    height: number,
+    initialScrollback: readonly string[] = [],
+    initialScreen: readonly string[] = [],
+  ) {
     this.height = height
-    this.screen = Array.from({ length: height }, () => '')
+    this.screen = Array.from({ length: height }, (_, index) => initialScreen[index] ?? '')
     this.scrollback = [...initialScrollback]
   }
 
@@ -114,6 +118,37 @@ class Emulator {
 
   outputAfter(mark: number): string {
     return this.captured.slice(mark)
+  }
+}
+
+class TwoBufferEmulator {
+  readonly main: Emulator
+  alt: Emulator
+  active: Emulator
+
+  constructor(height: number) {
+    this.main = new Emulator(height)
+    this.alt = new Emulator(height)
+    this.active = this.main
+  }
+
+  write(chunk: string): void {
+    const tokens = chunk.match(/\x1b\[[?0-9;]*[ -/]*[@-~]|\r\n|\r|\n|[^\r\n\x1b]+/g) ?? []
+    for (const token of tokens) {
+      if (token === '\x1b[?1049h') {
+        this.alt = new Emulator(this.main.height)
+        this.active = this.alt
+      } else if (token === '\x1b[?1049l') {
+        this.active = this.main
+      } else {
+        this.active.write(token)
+      }
+    }
+  }
+
+  resize(height: number): void {
+    this.main.resize(height)
+    this.alt.resize(height)
   }
 }
 
@@ -764,13 +799,12 @@ describe('MainScreenRenderer', () => {
 
     // Establish an old epoch with 15 finalized rows; physical ends up at 10.
     const old = Array.from({ length: 15 }, (_, i) => `old-${i}`)
-    renderer.render(frame(old, 10))
+    renderer.render(frame(old, 15))
     expect(emu.scrollback).toEqual(old.slice(0, 10))
     expect(emu.visible()).toEqual(old.slice(10, 15))
 
-    // A long discontinuous replacement session (> 2 * height) with finalized
-    // prefix that extends well above the visible tail. replaceSession/clear are
-    // signaled explicitly so stale native history is erased first.
+    // A long discontinuous replacement session (> 2 * height) starts a new
+    // visual epoch while preserving the previous epoch in native history.
     const replacement = Array.from({ length: 20 }, (_, i) => `new-${i}`)
     renderer.startEpoch()
     // A restored durable log can retain an orphaned pending seam near its
@@ -778,13 +812,13 @@ describe('MainScreenRenderer', () => {
     renderer.render(frame(replacement, 2))
     // The full off-screen prefix must have been written once and the visible
     // tail (new-15..new-19) must be on screen.
-    expect(emu.scrollback).toEqual(replacement.slice(0, 15))
+    expect(emu.scrollback).toEqual([...old, ...replacement.slice(0, 15)])
     expect(emu.visible()).toEqual(replacement.slice(15, 20))
 
     // Append within the new epoch must continue from the new baseline, not
     // replay the new frozen prefix.
     renderer.render(frame([...replacement, 'new-20', 'new-21'], 20))
-    expect(emu.scrollback).toEqual(replacement.slice(0, 17))
+    expect(emu.scrollback).toEqual([...old, ...replacement.slice(0, 17)])
     expect(emu.visible()).toEqual(['new-17', 'new-18', 'new-19', 'new-20', 'new-21'])
   })
 
@@ -803,19 +837,20 @@ describe('MainScreenRenderer', () => {
     expect(emu.visible()).toEqual(live.slice(15))
   })
 
-  it('does not emit ED3 when the terminal profile cannot clear scrollback', () => {
-    const emu = new Emulator(4, ['shell-history'])
+  it('preserves the pre-existing host screen before first paint', () => {
+    const shell = ['command output', 'more output', '$ omdsh', '']
+    const emu = new Emulator(4, ['shell-history'], shell)
     const renderer = new MainScreenRenderer(emu, {
       width: 80,
       height: 4,
       synchronized: false,
-      clearScrollback: false,
+      preserveInitialScreen: true,
     })
 
     renderer.startEpoch()
     renderer.render(frame(['HEADER', 'message-1', 'message-2', 'message-3', 'composer'], 5))
     expect(emu.captured).not.toContain('\x1b[3J')
-    expect(emu.scrollback).toEqual(['shell-history', 'HEADER'])
+    expect(emu.scrollback).toEqual(['shell-history', ...shell, 'HEADER'])
   })
 
   it('does not emit ED2/ED3 on every frame after a non-discontinuous shrink', () => {
@@ -841,7 +876,7 @@ describe('MainScreenRenderer', () => {
     expect(emu.visible()).toEqual(['', '', 'c', 'd', 'E'])
   })
 
-  it('clears stale native history before replaying a replacement epoch', () => {
+  it('preserves native history while replaying a replacement epoch', () => {
     const emu = new Emulator(4)
     const renderer = new MainScreenRenderer(emu, { width: 80, height: 4, synchronized: false })
 
@@ -850,9 +885,230 @@ describe('MainScreenRenderer', () => {
 
     renderer.startEpoch()
     renderer.render(frame(['HEADER', 'message-1', 'message-2', 'message-3', 'composer'], 5))
-    expect(emu.captured).toContain('\x1b[3J')
+    expect(emu.captured).not.toContain('\x1b[3J')
+    expect(emu.captured).toContain('\x1b[2J')
     expect(emu.scrollback).toEqual(['HEADER'])
     expect(emu.visible()).toEqual(['message-1', 'message-2', 'message-3', 'composer'])
+  })
+
+  it.each([
+    { from: 5, to: 3 },
+    { from: 3, to: 5 },
+  ])('settles alternate-buffer rows exactly once after resize $from->$to', ({ from, to }) => {
+    const emu = new TwoBufferEmulator(from)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: from,
+      synchronized: false,
+      alternateScreenMutable: true,
+    })
+    const prior = ['prior-1', 'prior-2', 'prior-3', 'prior-4', 'prior-5', 'prior-6']
+    renderer.render(frame(prior, prior.length, { livePinned: false }))
+    renderer.render(frame([...prior, 'draft-1', 'draft-2'], prior.length, { livePinned: true }))
+
+    emu.resize(to)
+    renderer.resize(80, to)
+    renderer.render(frame([...prior, 'draft-new'], prior.length, { livePinned: true }))
+    renderer.render(frame([...prior, 'final-1', 'final-2', 'final-3'], 9, { livePinned: false }))
+
+    expect(emu.active).toBe(emu.main)
+    expect([...emu.main.scrollback, ...emu.main.visible()]).toEqual([...prior, 'final-1', 'final-2', 'final-3'])
+  })
+
+  it('commits a pinned replacement prefix before entering the alternate buffer', () => {
+    const emu = new TwoBufferEmulator(4)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 4,
+      synchronized: false,
+      alternateScreenMutable: true,
+    })
+
+    renderer.render(frame(['old-1', 'old-2', 'old-3', 'old-live'], 3, { livePinned: false }))
+    renderer.startEpoch({ replay: 'pinned' })
+    renderer.render(frame(['new-1', 'new-2', 'new-3', 'new-4', 'draft'], 4, { livePinned: true }))
+    expect(emu.active).toBe(emu.alt)
+    expect([...emu.main.scrollback, ...emu.main.visible()].filter(Boolean)).toEqual([
+      'old-1',
+      'old-2',
+      'old-3',
+      'new-1',
+      'new-2',
+      'new-3',
+      'new-4',
+    ])
+
+    renderer.finish()
+    expect(emu.active).toBe(emu.main)
+    expect([...emu.main.scrollback, ...emu.main.visible()].filter(Boolean)).toContain('new-4')
+  })
+
+  it('replaces a pinned epoch without losing the previous finalized prefix', () => {
+    const emu = new TwoBufferEmulator(3)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 3,
+      synchronized: false,
+      alternateScreenMutable: true,
+    })
+
+    renderer.startEpoch({ replay: 'pinned' })
+    renderer.render(frame(['first-1', 'first-2', 'first-draft'], 2, { livePinned: true }))
+    renderer.startEpoch({ replay: 'pinned' })
+    renderer.render(frame(['second-1', 'second-2', 'second-draft'], 2, { livePinned: true }))
+    renderer.finish()
+
+    const tape = [...emu.main.scrollback, ...emu.main.visible()].filter(Boolean)
+    expect(tape).toContain('first-1')
+    expect(tape).toContain('first-2')
+    expect(tape).toContain('second-1')
+    expect(tape).toContain('second-2')
+    expect(tape).not.toContain('first-draft')
+    expect(tape).not.toContain('second-draft')
+  })
+
+  it('settles a multi-screen width-reflowed frame without losing or duplicating finalized rows', () => {
+    const emu = new TwoBufferEmulator(4)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 4,
+      synchronized: false,
+      alternateScreenMutable: true,
+    })
+    const wide = ['prefix', 'wrapping-sensitive line', 'settled-tail']
+    renderer.render(frame(wide, wide.length, { livePinned: false }))
+    renderer.render(frame([...wide, 'draft'], wide.length, { livePinned: true }))
+
+    renderer.resize(24, 4)
+    const narrow = Array.from({ length: 12 }, (_, index) => `narrow-${index}`)
+    renderer.render(frame([...narrow, 'draft-new'], narrow.length, { livePinned: true }))
+    renderer.render(frame(narrow, narrow.length, { livePinned: false }))
+
+    expect([...emu.main.scrollback, ...emu.main.visible()]).toEqual(narrow)
+    const before = [...emu.main.scrollback]
+    renderer.render(frame([...narrow, 'after'], narrow.length + 1, { livePinned: false }))
+    expect(emu.main.scrollback).toEqual([...before, 'narrow-8'])
+    expect(emu.main.visible()).toEqual(['narrow-9', 'narrow-10', 'narrow-11', 'after'])
+  })
+
+  it('freezes a short previous epoch prefix before pinned replacement settlement', () => {
+    const emu = new TwoBufferEmulator(5)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 5,
+      synchronized: false,
+      alternateScreenMutable: true,
+    })
+
+    renderer.render(frame(['old-1', 'old-2', 'old-live'], 2, { livePinned: false }))
+    renderer.startEpoch({ replay: 'pinned' })
+    renderer.render(frame(['new-1', 'draft'], 1, { livePinned: true }))
+    renderer.render(frame(['new-1', 'new-final'], 2, { livePinned: false }))
+
+    expect(emu.main.scrollback).toEqual(['old-1', 'old-2'])
+    expect(emu.main.visible().filter(Boolean)).toEqual(['new-1', 'new-final'])
+  })
+
+  it('promotes settled prefixes while bottom chrome keeps the frame pinned', () => {
+    const emu = new TwoBufferEmulator(3)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 3,
+      synchronized: false,
+      alternateScreenMutable: true,
+    })
+
+    renderer.render(frame(['settled-1', 'draft', 'chrome-1', 'chrome-2'], 1, { livePinned: true }))
+    renderer.render(frame([
+      'settled-1', 'settled-2', 'settled-3', 'settled-4',
+      'chrome-1', 'chrome-2', 'chrome-3', 'chrome-4',
+    ], 4, { livePinned: true }))
+    renderer.finish()
+
+    expect(emu.active).toBe(emu.main)
+    expect([...emu.main.scrollback, ...emu.main.visible()].filter(Boolean)).toEqual([
+      'settled-1', 'settled-2', 'settled-3', 'settled-4',
+    ])
+  })
+
+  it('keeps mutable rows in the alternate buffer through resize until settlement', () => {
+    const writes: string[] = []
+    const renderer = new MainScreenRenderer(
+      { write: chunk => { writes.push(chunk) } },
+      { width: 80, height: 5, synchronized: false, alternateScreenMutable: true },
+    )
+
+    renderer.render(frame(['prior-1', 'prior-2', 'prior-3'], 3, { livePinned: false }))
+    const mutableStart = writes.length
+    renderer.render(frame(['prior-1', 'prior-2', 'prior-3', 'draft-1', 'draft-2', 'draft-3', 'draft-4', 'draft-5'], 3, { livePinned: true }))
+    expect(writes.slice(mutableStart).join('')).toContain('\x1b[?1049h')
+    expect(writes.join('')).not.toContain('\x1b[?1049l')
+    expect(writes.join('')).not.toContain('\x1b[3J')
+
+    renderer.resize(80, 3)
+    renderer.render(frame(['prior-1', 'prior-2', 'prior-3', 'draft-new-1', 'draft-new-2', 'draft-new-3'], 3, { livePinned: true }))
+    expect(writes.at(-1)).toContain('draft-new-3')
+    expect(writes.at(-1)).toContain('\x1b[?1049l')
+    expect(writes.at(-1)).toContain('\x1b[?1049h')
+
+    renderer.render(frame(['prior-1', 'prior-2', 'prior-3', 'final-1', 'final-2', 'final-3'], 6, { livePinned: false }))
+    expect(writes.at(-1)).toContain('\x1b[?1049l')
+    expect(writes.at(-1)).toContain('final-1')
+    expect(writes.at(-1)).toContain('final-3')
+    expect(writes.join('')).not.toContain('\x1b[3J')
+  })
+
+  it('promotes settled rows before releasing a transient alternate screen', () => {
+    const emu = new TwoBufferEmulator(4)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 4,
+      synchronized: false,
+      alternateScreenOverlays: true,
+    })
+
+    renderer.render(frame(['old-1', 'old-2', 'old-3', 'composer'], 3, { livePinned: false }))
+    renderer.render(frame(['scrolled-view']))
+    expect(emu.active).toBe(emu.alt)
+
+    renderer.prepareForRelease(frame([
+      'old-1', 'old-2', 'old-3', 'settled-4', 'settled-5', 'composer',
+    ], 5, { livePinned: false }))
+    renderer.finish()
+
+    expect(emu.active).toBe(emu.main)
+    const tape = [...emu.main.scrollback, ...emu.main.visible()].filter(Boolean)
+    expect(tape).toContain('settled-4')
+    expect(tape).toContain('settled-5')
+    expect(tape).not.toContain('composer')
+  })
+
+  it('starts a fresh visual epoch after host writes during terminal ownership handoff', () => {
+    const emu = new TwoBufferEmulator(4)
+    const renderer = new MainScreenRenderer(emu, {
+      width: 80,
+      height: 4,
+      synchronized: false,
+      alternateScreenOverlays: true,
+    })
+
+    const before = ['old-1', 'old-2', 'old-3', 'old-4', 'old-5', 'old-6']
+    renderer.render(frame(before, before.length, { livePinned: false }))
+    renderer.prepareForRelease(frame(before, before.length, { livePinned: false }))
+    renderer.finish()
+
+    emu.main.write('HOST-1\r\nHOST-2\r\n')
+    renderer.resize(80, 4)
+    renderer.reacquire()
+    const after = ['new-1', 'new-2', 'new-3', 'new-4', 'new-5', 'new-6']
+    renderer.render(frame(after, after.length, { livePinned: false }))
+
+    const tape = [...emu.main.scrollback, ...emu.main.visible()].filter(Boolean)
+    expect(tape.slice(0, before.length)).toEqual(before)
+    expect(tape).toContain('HOST-1')
+    expect(tape).toContain('HOST-2')
+    expect(tape.slice(tape.lastIndexOf('HOST-2') + 1)).toEqual(after)
+    expect(emu.main.captured).not.toContain('\x1b[3J')
   })
 
   it('borrows the alternate screen for transient full-screen surfaces', () => {
@@ -877,6 +1133,26 @@ describe('MainScreenRenderer', () => {
     expect(overlayWrites.match(/\x1b\[\?1049h/gu)).toHaveLength(1)
     expect(overlayWrites.match(/\x1b\[\?1049l/gu)).toHaveLength(1)
     expect(overlayWrites).not.toContain('\x1b[3J')
+  })
+
+  it('sanitizes only newly emitted and visible rows on routine frames', () => {
+    const emu = new Emulator(5)
+    const renderer = new MainScreenRenderer(emu, { width: 80, height: 5, synchronized: false })
+    const initial = Array.from({ length: 10_000 }, (_, index) => `row-${index}`)
+    renderer.render(frame(initial, initial.length))
+
+    let reads = 0
+    const next = new Proxy([...initial, 'unsafe\u0000tail'], {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^\d+$/u.test(property)) reads += 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    renderer.render(frame(next, next.length))
+
+    expect(reads).toBeLessThan(100)
+    expect(emu.captured).not.toContain('\u0000')
+    expect(emu.visible().at(-1)).toBe('unsafetail')
   })
 
   it('replays a large resumed transcript without truncating its middle', () => {
