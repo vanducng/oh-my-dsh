@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.9.0](https://github.com/vanducng/oh-my-dsh/compare/v0.8.0...v0.9.0) (2026-08-21)
+
+
+### Features
+
+* **tui:** sync native scrollback and Agent Hub from upstream 0.8.0 ([#23](https://github.com/vanducng/oh-my-dsh/issues/23)) ([7c77cc5](https://github.com/vanducng/oh-my-dsh/commit/7c77cc554f0a973254c515af1fef29573036d7d3))
+
 ## [0.8.0](https://github.com/vanducng/oh-my-dsh/compare/v0.7.1...v0.8.0) (2026-08-20)
 
 
