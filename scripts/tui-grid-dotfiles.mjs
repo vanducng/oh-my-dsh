@@ -128,9 +128,12 @@ export async function materializeDotfilesHome(home, { cliproxyBaseUrl, env = pro
     copied.push(repoPath)
   }
   const pluginDir = join(home, 'omdsh')
+  // dsh-observe 0.1.1 declares DSH 0.1.0-rc.6 peers. npm 10 arborist crashes
+  // while walking that peer set (`edgesOut` on a null node). Legacy peer
+  // resolution still installs the plugin so the include check can run.
   const install = spawnSync(
     'npm',
-    ['install', '--ignore-scripts', '--no-fund', '--omit=dev'],
+    ['install', '--ignore-scripts', '--no-fund', '--omit=dev', '--legacy-peer-deps'],
     { cwd: pluginDir, encoding: 'utf8', timeout: 120_000, env },
   )
   if (install.status !== 0) {

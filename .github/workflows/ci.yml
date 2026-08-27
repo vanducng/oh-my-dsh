@@ -58,7 +58,7 @@ jobs:
       # Keyless PTY path: scripts/pty-smoke.mjs uses a fake DEEPSEEK_API_KEY and
       # node-pty (same runner capability as smoke:tui). Built mode matches the
       # documented "exercises the built command" contract after the Build step.
-      # Covers double Ctrl-C, /access, rewind, and the resume hint.
+      # Covers double Ctrl-C, /permission, rewind, and the resume hint.
       - name: PTY smoke
         run: pnpm smoke
         env:
