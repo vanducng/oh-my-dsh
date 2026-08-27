@@ -6,6 +6,12 @@ import { promisify } from 'node:util'
 const root = resolve(import.meta.dirname, '..')
 const check = process.argv.includes('--check')
 const execFileAsync = promisify(execFile)
+const skippedGenerated = new Set([
+  'apps/site/src/docs',
+  'apps/site/src/zh/docs',
+  'apps/site/src/changelog.md',
+  'apps/site/src/zh/changelog.md',
+])
 
 async function markdownFiles() {
   const { stdout } = await execFileAsync('git', [
@@ -21,7 +27,10 @@ async function markdownFiles() {
 
   const paths = stdout
     .split('\0')
-    .filter(path => path !== '' && path !== 'CHANGELOG.md' && !path.endsWith('/CHANGELOG.md'))
+    .filter((path) => {
+      if (path === '' || path === 'CHANGELOG.md' || path.endsWith('/CHANGELOG.md')) return false
+      return ![...skippedGenerated].some(prefix => path === prefix || path.startsWith(`${prefix}/`))
+    })
     .map(path => resolve(root, path))
 
   const files = await Promise.all(paths.map(async (path) => {
