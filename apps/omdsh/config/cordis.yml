@@ -305,6 +305,9 @@
   - id: tui-command-export
     name: '@vanducng/dsh-tui/command-export'
 
+  - id: tui-command-trajectory
+    name: '@vanducng/dsh-tui/command-trajectory'
+
   - id: tui-command-integrations
     name: '@vanducng/dsh-tui/command-integrations'
 

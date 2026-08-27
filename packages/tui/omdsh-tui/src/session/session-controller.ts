@@ -35,7 +35,7 @@ import type {} from '@deepseek-ai/dsh-session-projection'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/types'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
-import type { ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
+import type { ContextBreakdownProjection, ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-reference'
 import type {} from '@deepseek-ai/dsh-file-reference'
@@ -61,6 +61,7 @@ import {
   type SessionConfiguration,
 } from './session-configuration.ts'
 import { stripComposerImageMarkers } from '../input/image-paste.ts'
+import type { ContextDiagnostics } from './context-diagnostics.ts'
 
 interface ActiveSession {
   handle: AgentHandle
@@ -101,6 +102,7 @@ export interface TuiStatsProjection {
   sessionStats?: SessionStatsProjection
   tokenUsage?: TokenUsageProjection
   contextPressure?: ContextPressureProjection
+  contextBreakdown?: ContextBreakdownProjection
   plan?: PlanProjection
   permissions?: PermissionSelect
 }
@@ -536,7 +538,7 @@ export class SessionRuntime {
     if (projections !== undefined) {
       this.#off.push(projections.onChanged((session, key) => {
         if (session !== this.#active?.handle.agent.session) return
-        if (key === 'sessionStats' || key === 'tokenUsage' || key === 'contextPressure'
+        if (key === 'sessionStats' || key === 'tokenUsage' || key === 'contextPressure' || key === 'contextBreakdown'
           || key === 'plan' || key === 'permissions') this.#pushSessionInfo()
       }))
     }
@@ -567,13 +569,13 @@ export class SessionRuntime {
       signal?.throwIfAborted()
       const defaults = this.#ctx.get('agentDefaultModel')?.currentSelection()
       if (defaults === undefined) throw new Error('agent default model is unavailable')
+      await this.refreshRecent()
+      signal?.throwIfAborted()
       const next = options.resumeId === undefined
         ? await this.#create(defaults)
         : await this.#resume(defaults, options.resumeId, signal ?? new AbortController().signal)
       signal?.throwIfAborted()
       await this.#activate(next, signal)
-      signal?.throwIfAborted()
-      await this.refreshRecent()
       signal?.throwIfAborted()
     } catch (error: unknown) {
       this.#started = false
@@ -700,6 +702,30 @@ export class SessionRuntime {
     await this.refreshRecent()
   }
 
+  /** Rename a live or durable top-level session through the public log-backed title service. */
+  async renameSession(agent: Agent, id: string, title: string, signal: AbortSignal): Promise<void> {
+    this.assertActive(agent)
+    if (id === agent.id) {
+      this.#ctx.sessionTitle.rename(agent.session, title)
+      await this.refreshRecent()
+      return
+    }
+    const selection = this.selection(agent)
+    const ref: ModelSelectionRef = { current: selection, assembled: undefined }
+    const handle = await this.#ctx.agents.resume({
+      resumeSessionId: SessionId(id),
+      agentOptions: { provider: selection.provider, model: selection.model },
+      signal,
+      setup: async (agentCtx) => { await setupAgentContext(agentCtx, ref) },
+    })
+    try {
+      this.#ctx.sessionTitle.rename(handle.agent.session, title)
+    } finally {
+      await handle.dispose()
+    }
+    await this.refreshRecent()
+  }
+
   /** Fork before a selected human turn and restore that message as an editable draft. */
   async rewindToTurn(signal: AbortSignal): Promise<void> {
     const agent = this.#requiredAgent()
@@ -816,6 +842,17 @@ export class SessionRuntime {
     return this.#stats(this.#requiredActive())
   }
 
+  /** Current client-visible context projections, read as one consistent snapshot. */
+  contextDiagnostics(agent: Agent = this.#requiredAgent()): ContextDiagnostics {
+    this.assertActive(agent)
+    const projection = this.#projection(this.#requiredActive())
+    return {
+      ...(projection?.contextPressure === undefined ? {} : { pressure: { ...projection.contextPressure } }),
+      ...(projection?.tokenUsage === undefined ? {} : { usage: { ...projection.tokenUsage } }),
+      ...(projection?.contextBreakdown === undefined ? {} : { breakdown: { ...projection.contextBreakdown } }),
+    }
+  }
+
   /** Effective reasoning effort after applying the selected model's adapter default. */
   reasoningEffort(agent: Agent = this.#requiredAgent()): string | undefined {
     this.assertActive(agent)
@@ -912,10 +949,8 @@ export class SessionRuntime {
           eventCount: inspected.events.length,
           ...(status === undefined ? {} : { status }),
         })
-        if (rows.length >= 8) break
       } catch {
         rows.push({ id: header.id, title: '(unavailable session)', createdAt: header.createdAt })
-        if (rows.length >= 8) break
       }
     }
     this.#recent = rows
@@ -1015,7 +1050,10 @@ export class SessionRuntime {
     this.#tui.setInspectedSubagent(undefined)
     this.#tui.setStatus(agent.status)
     this.#syncSubagents()
-    if (previous !== undefined) this.#replaceTranscript(agent)
+    // Seed welcome metadata before replaceSession commits the startup header to
+    // native scrollback; later updates cannot rewrite that frozen first frame.
+    this.#pushSessionInfo()
+    this.#replaceTranscript(agent)
     this.#pushTools()
     const selected = this.selection(agent)
     const info = await this.#resolveModelInfo(selected)
@@ -1027,7 +1065,6 @@ export class SessionRuntime {
     await this.#refreshSkills()
     signal?.throwIfAborted()
     this.#pushSessionInfo()
-    if (previous === undefined) this.#replaceTranscript(agent)
     if (previous !== undefined) this.#retired.push(previous.handle)
   }
 
