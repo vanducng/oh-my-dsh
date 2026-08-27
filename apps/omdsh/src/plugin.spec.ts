@@ -299,7 +299,7 @@ describe('omdsh plugin', () => {
     const anchor = join(temp('omdsh-plugin-anchor-'), 'package.json')
     writePackage(join(anchor, '..'), {
       name: '@vanducng/oh-my-dsh',
-      dependencies: { '@deepseek-ai/dsh-agent': '0.1.0-rc.8' },
+      dependencies: { '@deepseek-ai/dsh-agent': '0.1.1-rc.2' },
     })
     writePackage(dir, {
       name: 'dsh-profile-omdsh',
