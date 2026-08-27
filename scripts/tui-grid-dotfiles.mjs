@@ -129,8 +129,8 @@ export async function materializeDotfilesHome(home, { cliproxyBaseUrl, env = pro
   }
   const pluginDir = join(home, 'omdsh')
   const install = spawnSync(
-    'npm',
-    ['install', '--ignore-scripts', '--no-fund', '--omit=dev'],
+    'pnpm',
+    ['install', '--ignore-scripts', '--prod'],
     { cwd: pluginDir, encoding: 'utf8', timeout: 120_000, env },
   )
   if (install.status !== 0) {
