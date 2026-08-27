@@ -125,7 +125,12 @@ export function modelStatus(
   }
 }
 
-/** Fold a complete log as the capability-absence fallback for projections. */
+/**
+ * Fold a complete log as the capability-absence fallback for projections.
+ * Remaining fallbacks: elapsed time from first/last event timestamps, and the
+ * whole stats/token fold when `sessionStats`, `tokenUsage`, or context pressure
+ * is missing from the client-visible snapshot.
+ */
 export function sessionStats(
   events: readonly SessionEvent[],
   contextWindow?: number,
@@ -375,7 +380,7 @@ interface RestoreAttachmentStore {
   readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
 }
 
-/** Persist draft images as one batch, then build one mixed user message. */
+/** Admit one ordered image batch, then build one atomic mixed user message. */
 export async function createSubmissionMessage(
   submission: TuiSubmission,
   attachments?: SubmissionAttachmentStore,
@@ -386,7 +391,7 @@ export async function createSubmissionMessage(
     ...(image.name === undefined ? {} : { name: image.name }),
   }))
   if (inputs.length > 0 && attachments === undefined) throw new Error('Attachment storage is not configured.')
-  const refs = inputs.length === 0 || attachments === undefined
+  const refs: ImageAttachmentRef[] = inputs.length === 0 || attachments === undefined
     ? []
     : [...await attachments.saveImages(inputs)]
   const content = [
@@ -1329,7 +1334,7 @@ export class SessionRuntime {
     }
   }
 
-  /** Read one consistent projection cut, with the complete-log fold as fallback. */
+  /** Read one client-visible snapshot. Host-only projection state is never consulted. */
   #projection(active: ActiveSession): TuiStatsProjection | undefined {
     return this.#ctx.get('sessionProjections')?.snapshot(active.handle.agent.session).values
   }

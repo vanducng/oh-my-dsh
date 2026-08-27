@@ -139,6 +139,8 @@ describe('boot patch assembly', () => {
     expect(dump).toContain('name: \'@vanducng/dsh-tui\'')
     expect(dump).toContain('id: llm-pi-ai')
     expect(dump).toContain('@deepseek-ai/dsh-llm-pi-ai')
+    expect(dump).toContain('id: authorization')
+    expect(dump).toContain('@deepseek-ai/dsh-authorization')
     expect(dump).toContain('id: storage')
     expect(dump).toContain('id: storage-json')
     expect(dump).toContain('id: storage-domain')
@@ -157,9 +159,9 @@ describe('boot patch assembly', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { dependencies?: Record<string, string> }
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.0-rc.8')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.0-rc.8')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.0-rc.8')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.1-rc.2')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.1-rc.2')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.1-rc.2')
   })
 
   it('labels both home and MCP layers in the dump', () => {
