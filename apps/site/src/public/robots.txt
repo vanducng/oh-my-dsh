@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://vanducng.github.io/oh-my-dsh/sitemap.xml
