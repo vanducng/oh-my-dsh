@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export const DOTFILES_REPO = 'vanducng/dotfiles'
@@ -128,43 +128,26 @@ export async function materializeDotfilesHome(home, { cliproxyBaseUrl, env = pro
     copied.push(repoPath)
   }
   const pluginDir = join(home, 'omdsh')
-  npmInstallUserPlugins(pluginDir, env)
-  return { copied, pluginDir }
-}
-
-const NPM_INSTALL_ARGS = ['install', '--ignore-scripts', '--no-fund', '--omit=dev', '--legacy-peer-deps']
-
-function runNpmInstall(pluginDir, extraArgs, env) {
-  const install = spawnSync('npm', [...NPM_INSTALL_ARGS, ...extraArgs], {
-    cwd: pluginDir,
-    encoding: 'utf8',
-    timeout: 120_000,
-    env,
-  })
+  // npm 10 arborist crashes on dsh-observe 0.1.1's DSH 0.1.0-rc.6 peer set
+  // (`edgesOut` on a null node). npm 11 installs that tree so the include
+  // can load.
+  const install = spawnSync(
+    'npx',
+    ['--yes', 'npm@11', 'install', '--ignore-scripts', '--no-fund', '--omit=dev'],
+    { cwd: pluginDir, encoding: 'utf8', timeout: 120_000, env: isolatedNpmEnv(env) },
+  )
   if (install.status !== 0) {
     throw new Error(`dsh-observe install failed exit=${install.status} ${redactSecrets(install.stderr || install.stdout, env).slice(0, 400)}`)
   }
+  return { copied, pluginDir }
 }
 
-/**
- * Install the copied plugin pack, then its declared peers.
- * npm 10 arborist crashes on dsh-observe 0.1.1's DSH 0.1.0-rc.6 peer set
- * (`edgesOut` on a null node). Legacy peer resolution plus an explicit
- * follow-up install still leaves the plugin loadable for the include check.
- */
-function npmInstallUserPlugins(pluginDir, env) {
-  runNpmInstall(pluginDir, [], env)
-  const peers = []
-  const userPkg = JSON.parse(readFileSync(join(pluginDir, 'package.json'), 'utf8'))
-  for (const name of Object.keys(userPkg.dependencies ?? {})) {
-    const depPkgPath = join(pluginDir, 'node_modules', name, 'package.json')
-    if (!existsSync(depPkgPath)) continue
-    const depPkg = JSON.parse(readFileSync(depPkgPath, 'utf8'))
-    for (const [peer, range] of Object.entries(depPkg.peerDependencies ?? {})) {
-      peers.push(`${peer}@${range}`)
-    }
+function isolatedNpmEnv(env) {
+  const next = { ...env }
+  for (const key of Object.keys(next)) {
+    if (key.startsWith('npm_') || key.startsWith('PNPM_')) delete next[key]
   }
-  if (peers.length > 0) runNpmInstall(pluginDir, peers, env)
+  return next
 }
 
 function langfuseOrigin(env = process.env) {
