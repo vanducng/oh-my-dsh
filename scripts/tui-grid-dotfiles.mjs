@@ -128,26 +128,16 @@ export async function materializeDotfilesHome(home, { cliproxyBaseUrl, env = pro
     copied.push(repoPath)
   }
   const pluginDir = join(home, 'omdsh')
-  // npm 10 arborist crashes on dsh-observe 0.1.1's DSH 0.1.0-rc.6 peer set
-  // (`edgesOut` on a null node). npm 11 installs that tree so the include
-  // can load.
+  // pnpm avoids npm 10 arborist crashing on dsh-observe 0.1.1's peer set.
   const install = spawnSync(
-    'npx',
-    ['--yes', 'npm@11', 'install', '--ignore-scripts', '--no-fund', '--omit=dev'],
-    { cwd: pluginDir, encoding: 'utf8', timeout: 120_000, env: isolatedNpmEnv(env) },
+    'pnpm',
+    ['install', '--ignore-scripts', '--prod'],
+    { cwd: pluginDir, encoding: 'utf8', timeout: 120_000, env },
   )
   if (install.status !== 0) {
     throw new Error(`dsh-observe install failed exit=${install.status} ${redactSecrets(install.stderr || install.stdout, env).slice(0, 400)}`)
   }
   return { copied, pluginDir }
-}
-
-function isolatedNpmEnv(env) {
-  const next = { ...env }
-  for (const key of Object.keys(next)) {
-    if (key.startsWith('npm_') || key.startsWith('PNPM_')) delete next[key]
-  }
-  return next
 }
 
 function langfuseOrigin(env = process.env) {

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.10.0](https://github.com/vanducng/oh-my-dsh/compare/v0.9.0...v0.10.0) (2026-08-27)
+
+
+### Features
+
+* **deps:** bumped DeepSeek Harness to 0.1.1-rc.2 ([#26](https://github.com/vanducng/oh-my-dsh/issues/26)) ([940291f](https://github.com/vanducng/oh-my-dsh/commit/940291fc2745f14de97ff996b3aa5289d5eb78b2))
+
 ## [0.9.0](https://github.com/vanducng/oh-my-dsh/compare/v0.8.0...v0.9.0) (2026-08-21)
 
 
