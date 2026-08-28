@@ -11,6 +11,18 @@
   "bugs": {
     "url": "https://github.com/vanducng/oh-my-dsh/issues"
   },
+  "keywords": [
+    "omdsh",
+    "oh-my-dsh",
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "dsh-plugin",
+    "tui",
+    "coding-agent",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "omdsh": "lib/bin.js"

@@ -1,0 +1,147 @@
+---
+import '../styles/fonts.css'
+import '../styles/tokens.css'
+import '../styles/base.css'
+import { alternatePath, hrefPath, localizedPath, repoUrl, ui, type Locale } from '../i18n'
+import { seoFor } from '../seo'
+import StatusFooter from '../components/StatusFooter.astro'
+import SearchPalette from '../components/SearchPalette.astro'
+import spaceGroteskWoff2 from '@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2?url'
+import jetbrainsMonoWoff2 from '@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url'
+
+interface Props {
+  locale: Locale
+  path: string
+  title: string
+  description?: string
+  words?: number
+  index?: boolean
+}
+
+const { locale, path, title, description = '', words = 0, index = true } = Astro.props
+const seo = seoFor(path, locale, title, description, { index })
+const t = ui[locale]
+const docsHref = hrefPath(localizedPath('/docs/tutorials', locale))
+const changelogHref = hrefPath(localizedPath('/changelog', locale))
+const homeHref = hrefPath(localizedPath('/', locale))
+const languageHref = hrefPath(alternatePath(seo.canonicalPath, locale))
+const faviconHref = hrefPath('/favicon.svg')
+const measurementId = import.meta.env.PUBLIC_OMDSH_GA_ID
+const onDocs = path.includes('/docs')
+const onChangelog = path.includes('/changelog')
+---
+
+<!doctype html>
+<html lang={seo.inLanguage}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{seo.title}</title>
+    <meta name="description" content={seo.description} />
+    <meta name="keywords" content={seo.keywords} />
+    {seo.index ? <link rel="canonical" href={seo.canonical} /> : <meta name="robots" content="noindex, follow" />}
+    {
+      seo.index && (
+        <>
+          <link rel="alternate" hreflang="en-US" href={locale === 'zh' ? seo.alternate : seo.canonical} />
+          <link rel="alternate" hreflang="zh-CN" href={locale === 'zh' ? seo.canonical : seo.alternate} />
+          <link rel="alternate" hreflang="x-default" href={locale === 'zh' ? seo.alternate : seo.canonical} />
+        </>
+      )
+    }
+    <meta property="og:site_name" content="Oh My DSH" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={seo.title} />
+    <meta property="og:description" content={seo.description} />
+    <meta property="og:url" content={seo.canonical} />
+    <meta property="og:locale" content={seo.ogLocale} />
+    <meta property="og:locale:alternate" content={seo.ogLocaleAlternate} />
+    <meta property="og:image" content={seo.image} />
+    <meta property="og:image:type" content={seo.imageType} />
+    <meta property="og:image:width" content={String(seo.imageWidth)} />
+    <meta property="og:image:height" content={String(seo.imageHeight)} />
+    <meta property="og:image:alt" content={seo.imageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={seo.title} />
+    <meta name="twitter:description" content={seo.description} />
+    <meta name="twitter:image" content={seo.image} />
+    <meta name="twitter:image:alt" content={seo.imageAlt} />
+    <link rel="icon" href={faviconHref} type="image/svg+xml" />
+    <link rel="preload" href={spaceGroteskWoff2} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={jetbrainsMonoWoff2} as="font" type="font/woff2" crossorigin />
+    {
+      measurementId && (
+        <script is:inline define:vars={{ measurementId }}>
+          window.dataLayer = window.dataLayer || []
+          function gtag() {
+            dataLayer.push(arguments)
+          }
+          gtag('js', new Date())
+          gtag('config', measurementId)
+          let loaded = false
+          const loadAnalytics = () => {
+            if (loaded) return
+            loaded = true
+            const script = document.createElement('script')
+            script.src = 'https://www.googletagmanager.com/gtag/js?id=' + measurementId
+            script.async = true
+            document.head.appendChild(script)
+          }
+          const scheduleAnalytics = () => {
+            if ('requestIdleCallback' in window) requestIdleCallback(loadAnalytics, { timeout: 5000 })
+            else setTimeout(loadAnalytics, 1)
+          }
+          ;['pointerdown', 'keydown', 'scroll'].forEach((type) => {
+            window.addEventListener(type, loadAnalytics, { once: true, passive: true })
+          })
+          if (document.readyState === 'complete') scheduleAnalytics()
+          else window.addEventListener('load', scheduleAnalytics)
+        </script>
+      )
+    }
+    <script is:inline type="application/ld+json" set:html={JSON.stringify(seo.graph)} />
+    <script is:inline>
+      try {
+        const saved = localStorage.getItem('omdsh-theme')
+        if (saved === 'light') document.documentElement.dataset.theme = 'light'
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="nav-brand" href={homeHref}>
+          <span class="whale">🐳</span>
+          <span>Oh My <span class="wordmark-dsh">DSH</span></span>
+        </a>
+        <nav class="nav-links">
+          <a href={docsHref} class:list={[{ active: onDocs }]}>{t.docs}</a>
+          <a href={changelogHref} class:list={[{ active: onChangelog }]}>{t.changelog}</a>
+        </nav>
+        <div class="nav-end">
+          <button class="nav-btn" type="button" data-open-search aria-label={t.search}>
+            <span>{t.search}</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+          <button class="nav-btn" type="button" data-theme-toggle aria-label={t.theme}>◐</button>
+          <a class="nav-btn" href={languageHref}>{locale === 'zh' ? 'EN' : '中文'}</a>
+          <a class="nav-btn nav-github" href={repoUrl}>GitHub</a>
+        </div>
+      </div>
+    </header>
+    <slot />
+    <StatusFooter locale={locale} path={seo.canonicalPath} words={words} />
+    <SearchPalette locale={locale} />
+    <script is:inline>
+      document.querySelectorAll('[data-theme-toggle]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'
+          document.documentElement.dataset.theme = next
+          try {
+            localStorage.setItem('omdsh-theme', next)
+          } catch {}
+        })
+      })
+    </script>
+  </body>
+</html>

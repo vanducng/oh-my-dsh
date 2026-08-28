@@ -11,6 +11,17 @@
   "bugs": {
     "url": "https://github.com/vanducng/oh-my-dsh/issues"
   },
+  "keywords": [
+    "omdsh",
+    "oh-my-dsh",
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "dsh-plugin",
+    "tui",
+    "cordis",
+    "terminal"
+  ],
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

@@ -7,10 +7,8 @@ const root = resolve(import.meta.dirname, '..')
 const check = process.argv.includes('--check')
 const execFileAsync = promisify(execFile)
 const skippedGenerated = new Set([
-  'apps/site/src/docs',
-  'apps/site/src/zh/docs',
-  'apps/site/src/changelog.md',
-  'apps/site/src/zh/changelog.md',
+  'apps/site/dist',
+  'apps/site/.astro',
 ])
 
 async function markdownFiles() {
