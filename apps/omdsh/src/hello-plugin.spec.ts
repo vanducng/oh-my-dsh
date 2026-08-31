@@ -135,6 +135,14 @@ describe('examples/hello bundle', () => {
     const home = temp('omdsh-hello-packed-home-')
     const tuiArchive = packedArchive(tuiDir, packDir)
     const appArchive = packedArchive(appDir, packDir)
+    writeFileSync(join(installDir, 'package.json'), JSON.stringify({
+      private: true,
+      overrides: {
+        '@deepseek-ai/cordis': '4.0.1',
+        '@deepseek-ai/cordis-plugin-include': '1.0.6',
+        '@deepseek-ai/cordis-plugin-group': '1.0.1',
+      },
+    }))
     const installed = spawnSync('npm', ['install', '--prefix', installDir, appArchive, tuiArchive], {
       encoding: 'utf8',
       timeout: 180_000,

@@ -55,6 +55,14 @@ try {
   const tuiTarball = join(temp, `vanducng-dsh-tui-${cliVersion}.tgz`)
   const cliTarball = join(temp, `vanducng-oh-my-dsh-${cliVersion}.tgz`)
   const prefix = join(temp, 'install')
+  writeFileSync(join(temp, 'package.json'), JSON.stringify({
+    private: true,
+    overrides: {
+      '@deepseek-ai/cordis': '4.0.1',
+      '@deepseek-ai/cordis-plugin-include': '1.0.6',
+      '@deepseek-ai/cordis-plugin-group': '1.0.1',
+    },
+  }))
 
   run('npm', ['install', '--ignore-scripts', '--global', '--prefix', prefix, tuiTarball, cliTarball], temp)
 
