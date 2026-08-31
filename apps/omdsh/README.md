@@ -45,6 +45,7 @@ The full documentation is also published on the [documentation site](https://van
 - [User plugins](https://vanducng.github.io/oh-my-dsh/docs/plugins/) — install DSH bundles into the omdsh Profile with `omdsh plugin`.
 - [Architecture](https://vanducng.github.io/oh-my-dsh/docs/architecture/) — understand the plugin boundaries and runtime data flow.
 - [Performance](https://vanducng.github.io/oh-my-dsh/docs/performance/) — inspect the benchmarks, methodology, and rendering optimizations.
+- [Report a bug or request a feature](https://github.com/vanducng/oh-my-dsh/issues/new/choose) — use a guided form to include the version, environment, reproduction steps, and sanitized context.
 
 ## Why oh-my-dsh
 
