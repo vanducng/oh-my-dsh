@@ -43,10 +43,6 @@ function run(command, args, cwd = root) {
   return result.stdout
 }
 
-function executable(prefix, name) {
-  return process.platform === 'win32' ? join(prefix, `${name}.cmd`) : join(prefix, 'bin', name)
-}
-
 try {
   run('pnpm', ['--filter', '@vanducng/dsh-tui', 'pack', '--pack-destination', temp])
   run('pnpm', ['--filter', '@vanducng/oh-my-dsh', 'pack', '--pack-destination', temp])
@@ -55,7 +51,8 @@ try {
   const tuiTarball = join(temp, `vanducng-dsh-tui-${cliVersion}.tgz`)
   const cliTarball = join(temp, `vanducng-oh-my-dsh-${cliVersion}.tgz`)
   const prefix = join(temp, 'install')
-  writeFileSync(join(temp, 'package.json'), JSON.stringify({
+  mkdirSync(prefix, { recursive: true })
+  writeFileSync(join(prefix, 'package.json'), JSON.stringify({
     private: true,
     overrides: {
       '@deepseek-ai/cordis': '4.0.1',
@@ -64,7 +61,7 @@ try {
     },
   }))
 
-  run('npm', ['install', '--ignore-scripts', '--global', '--prefix', prefix, tuiTarball, cliTarball], temp)
+  run('npm', ['install', '--ignore-scripts', '--prefix', prefix, tuiTarball, cliTarball], prefix)
 
   const listing = run('tar', ['-tf', cliTarball])
   if (!listing.includes('package/lib/bin.js') || !listing.includes('package/config/cordis.yml')) {
@@ -77,7 +74,7 @@ try {
     throw new Error(`packed CLI still depends on workspace TUI: ${String(tuiDep)}`)
   }
 
-  const bin = executable(prefix, 'omdsh')
+  const bin = join(prefix, 'node_modules', '.bin', 'omdsh')
   const help = execute(bin, ['--help'], temp)
   if (help.status !== 0 || !help.stdout.includes('omdsh')) {
     throw new Error(`omdsh --help failed: ${(help.stderr || help.stdout).trim()}`)
