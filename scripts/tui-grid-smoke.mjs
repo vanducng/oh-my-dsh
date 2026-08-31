@@ -73,7 +73,7 @@ function screenTokens(text, tokens) {
 
 function snapshot(name, text) {
   const normalized = normalizeGrid(text, replacements)
-    .replace(/( · (?:code|both)) +(\$WORKSPACE · main)/gu, '$1   $2')
+    .replace(/( · ptc) +(\$WORKSPACE · main)/gu, '$1   $2')
   const result = compareSnapshot(name, normalized)
   if (result.updated) {
     console.log(`SNAPSHOT_UPDATED ${name}`)
@@ -96,7 +96,7 @@ try {
   const boot = await session.waitFor(
     (text) => text.includes('Into the Unknown')
       && /│\s+high\s+│/u.test(text)
-      && /deepseek-v4-flash(?: · high)? · ptc · code/u.test(text)
+      && /deepseek-v4-flash(?: · high)? · ptc/u.test(text)
       && text.includes('🐳'),
     'boot header, model footer, and composer',
   )
@@ -113,24 +113,12 @@ try {
   snapshot('agent-selector.txt', gridFrom(agent, '╭─── Agent'))
   session.write('\x1b')
   const ptc = await session.waitFor(
-    (text) => !text.includes('Choose the Agent composition for this blank session') && /ptc · code/u.test(text),
+    (text) => !text.includes('Choose the Agent composition for this blank session') && /ptc/u.test(text),
     'PTC footer after closing the Agent selector',
   )
-  screenTokens(ptc, ['ptc · code'])
+  screenTokens(ptc, ['ptc'])
   snapshot('agent-ptc-footer.txt', lastRows(ptc, 8))
   console.log('PASS /agent PTC')
-
-  session.write('/tool-mode\r')
-  const tools = await session.waitFor(
-    (text) => text.includes('Choose how tools are exposed to the model') && text.includes('Both'),
-    'Tools selector',
-  )
-  screenTokens(tools, ['Choose how tools are exposed to the model', 'Native', 'Code', 'Both'])
-  snapshot('tools-selector.txt', gridFrom(tools, '╭─── Tools'))
-  session.write('\x1b[B\r')
-  const both = await session.waitFor((text) => text.includes('Tools: Both'), 'Both tool presentation')
-  screenTokens(both, ['Tools: Both'])
-  console.log('PASS /tool-mode Both')
 
   session.write('@')
   const listing = await session.waitFor(
