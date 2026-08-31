@@ -192,7 +192,7 @@ describe('applyEvent', () => {
       kind: 'tool',
       callId: 'call-1',
       status: 'error',
-      output: 'interrupted before a result',
+      output: 'No durable tool result was recorded before the turn ended. The tool\'s outcome is unknown.',
     }))
     expect(view(state).livePinned).toBe(false)
   })

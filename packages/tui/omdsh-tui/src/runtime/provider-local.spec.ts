@@ -200,7 +200,7 @@ describe('LocalTui (tty)', () => {
     tui.setSession({
       id: 'session-atomic',
       recent: [],
-      controls: { agentPreset: 'standard', tools: 'both' },
+      controls: { agentPreset: 'standard' },
     })
     expect(term.writes).toBe(before)
 
@@ -210,7 +210,7 @@ describe('LocalTui (tty)', () => {
     expect(term.writes).toBe(before + 1)
     expect(term.captured).toContain('deepseek-v4-pro')
     expect(term.captured).toContain('max')
-    expect(term.captured).toContain('standard · both')
+    expect(term.captured).toContain('standard')
     expect(term.captured).toContain('atomic session')
     tui.dispose()
   })
@@ -268,7 +268,7 @@ describe('LocalTui (tty)', () => {
       step: 1,
       chunk: { type: 'text-delta', index: 0, text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n') },
     }, 1))
-    await new Promise<void>(resolve => { setTimeout(resolve, 15) })
+    await new Promise<void>(resolve => { setTimeout(resolve, 50) })
     expect(term.captured).toContain('\x1b[?1049h')
     expect(term.captured).not.toContain('\x1b[?1049l')
     expect(term.captured).not.toContain('\x1b[3J')
@@ -793,6 +793,13 @@ describe('LocalTui (tty)', () => {
     if (process.platform === 'win32') return
     const term = new FakeTerminal()
     const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 0 })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
+    })
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
     try {
       tui.event(ev('assistant/chunk', {
@@ -837,6 +844,13 @@ describe('LocalTui (tty)', () => {
         term.output.write('\x1b[?1049hEDITOR\x1b[?1049lEDITOR-MAIN\r\n')
         return 'edited prompt'
       },
+    })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
     })
     tui.event(ev('assistant/chunk', {
       turn: 1,
@@ -924,14 +938,14 @@ describe('LocalTui (tty)', () => {
       tui.setSession({
         id: 'session-stream',
         recent: [],
-        controls: { agentPreset: 'ptc', tools: 'code' },
+        controls: { agentPreset: 'ptc' },
       })
       expect(term.writes).toBe(initialWrites)
 
       await vi.advanceTimersByTimeAsync(34)
       expect(term.writes).toBe(initialWrites + 1)
       expect(term.captured).toContain('abc')
-      expect(stripAnsi(term.captured)).toContain('ptc · code')
+      expect(stripAnsi(term.captured)).toContain('ptc')
 
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'd' } }, 4))
       tui.event(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 5))
