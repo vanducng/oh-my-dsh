@@ -13,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { CallId, ContentBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, ToolResultMessage } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import type { FileDiff } from '@deepseek-ai/dsh-tools'
 import type { AutocompleteItem, SlashCommand } from './autocomplete.ts'
 import { leadingSlashCommandNameRange, renderAutocomplete, slashInlineHint } from './autocomplete.ts'
@@ -22,6 +23,8 @@ import { renderMarkdown, type MarkdownStyle } from '../chrome/markdown.ts'
 import type { Frame, TranscriptScroll } from '../chrome/renderer.ts'
 import { renderCopySelector, type CopySelectorState } from './copy-selector.ts'
 import { renderSettings, type SettingsState } from './settings-list.ts'
+import { renderTrajectory, type TrajectoryState } from './trajectory.ts'
+import { renderAgentHub, type AgentHubState } from './agent-hub.ts'
 import {
   renderPlanReviewPage,
   renderPromptSelector,
@@ -55,6 +58,7 @@ import { renderToolsPanel, type ToolInfo } from '../chrome/tools-list.ts'
 import { renderCommandOutput, renderCommandSeparator } from '../chrome/command-output.ts'
 import type { WelcomeTip } from '../chrome/welcome-tips.ts'
 import { renderPathMentionRows } from '../chrome/path-mentions.ts'
+import type { MotionMode } from '../session/tui-settings.ts'
 
 type TodoItem = Extract<SessionEvent, { type: 'todo/write' }>['data']['todos'][number]
 
@@ -68,7 +72,7 @@ export type Block =
   | { kind: 'tool'; callId: CallId; name: string; args: string; status: ToolBlockStatus; output: string; partial?: boolean; presentation?: TuiToolPresentation }
   | { kind: 'toolCatalog'; tools: readonly ToolInfo[] }
   | { kind: 'commandOutput'; command: string; text: string }
-  | { kind: 'notice'; level: 'info' | 'error'; text: string; framed?: boolean }
+  | { kind: 'notice'; level: 'info' | 'warning' | 'error'; text: string; framed?: boolean }
 
 /** True for blocks whose rendered text may still change. */
 function isBlockPending(block: Block): boolean {
@@ -159,11 +163,86 @@ function prettyArgs(raw: string): string {
   }
 }
 
-/** The streaming assistant block if it is the last block, else undefined. */
-function streamingBlock(state: TranscriptState, turn: number, step: number): Block | undefined {
-  const last = state.blocks[state.blocks.length - 1]
-  if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) return last
-  return undefined
+function isRetryNotice(block: Block | undefined): boolean {
+  return block?.kind === 'notice' && block.level === 'info' && block.text.startsWith('retrying ')
+}
+
+function formatRetryNotice(event: Extract<SessionEvent, { type: 'llm/retry' }>): string {
+  const budget = event.data.mode === 'always'
+    ? `${event.data.retry}`
+    : `${event.data.retry}/${event.data.maxRetries}`
+  return `retrying ${event.data.failure.code} (${budget})`
+}
+
+function dropRetryNotice(blocks: Block[]): void {
+  if (isRetryNotice(blocks[blocks.length - 1])) blocks.pop()
+}
+
+const MAX_TOKENS_NOTICE = 'Output token limit reached before the response completed. Send “continue” to resume.'
+const MAX_TOKENS_TOOL_NOTICE = 'Output token limit reached. A partial tool call was not executed because its arguments may be incomplete. Send “continue” to resume.'
+const INTERRUPTED_NOTICE = 'Session was interrupted before completion.'
+const INTERRUPTED_TOOL_NOTICE = 'Session was interrupted before completion. A partial tool call was not executed.'
+const UNFINISHED_TOOL_OUTPUT = 'No durable tool result was recorded before the turn ended. The tool\'s outcome is unknown.'
+
+interface ReplayIndexes {
+  readonly toolByCallId: Map<string, number>
+}
+
+function isMutableAttemptBlock(block: Block, turn: number, step?: number): boolean {
+  if (block.kind === 'assistant') {
+    return block.streaming && block.turn === turn && (step === undefined || block.step === step)
+  }
+  return block.kind === 'tool' && block.partial === true
+}
+
+/** Drop trailing live mutable rows from a failed attempt and keep replay indexes aligned. */
+function hideFailedAttempt(
+  blocks: Block[],
+  turn: number,
+  step: number | undefined,
+  indexes?: ReplayIndexes,
+): void {
+  while (blocks.length > 0) {
+    const last = blocks[blocks.length - 1]
+    if (last === undefined) break
+    if (isRetryNotice(last)) {
+      blocks.pop()
+      continue
+    }
+    if (!isMutableAttemptBlock(last, turn, step)) break
+    blocks.pop()
+    if (last.kind === 'tool') indexes?.toolByCallId.delete(last.callId)
+  }
+}
+
+/** Remove streamed tool previews that never became durable tool/call events. */
+function dropPartialToolPreviews(blocks: Block[], indexes?: ReplayIndexes): boolean {
+  let removed = false
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    if (block?.kind !== 'tool' || block.partial !== true) continue
+    blocks.splice(index, 1)
+    removed = true
+  }
+  if (removed && indexes !== undefined) {
+    indexes.toolByCallId.clear()
+    for (const [index, block] of blocks.entries()) {
+      if (block.kind === 'tool') indexes.toolByCallId.set(block.callId, index)
+    }
+  }
+  return removed
+}
+
+/** Preserve dispatched calls for audit while ensuring none remain visually active after a turn. */
+function settleUnfinishedToolCalls(blocks: Block[]): void {
+  for (const [index, block] of blocks.entries()) {
+    if (block.kind !== 'tool' || block.status !== 'running' || block.partial === true) continue
+    blocks[index] = {
+      ...block,
+      status: 'error',
+      output: block.output === '' ? UNFINISHED_TOOL_OUTPUT : block.output,
+    }
+  }
 }
 
 /** Replace the trailing streaming block with a settled one, or append. */
@@ -181,7 +260,7 @@ function settleAssistant(
   mutable: boolean,
 ): TranscriptState {
   const blocks = editableBlocks(state, mutable)
-  const last = blocks[blocks.length - 1]
+  dropRetryNotice(blocks)
   const settled: Block = {
     kind: 'assistant',
     turn,
@@ -191,9 +270,17 @@ function settleAssistant(
     streaming: false,
     ...(interrupted ? { interrupted: true } : {}),
   }
-  if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
-    blocks[blocks.length - 1] = settled
-  } else {
+  let streamingIndex = -1
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const candidate = blocks[index]
+    if (candidate?.kind === 'assistant' && candidate.streaming && candidate.turn === turn && candidate.step === step) {
+      streamingIndex = index
+      break
+    }
+  }
+  if (streamingIndex >= 0) {
+    blocks[streamingIndex] = settled
+  } else if (text !== '' || reasoning !== '') {
     blocks.push(settled)
   }
   return { ...state, blocks }
@@ -236,10 +323,6 @@ export function settleIdleTranscript(state: TranscriptState): TranscriptState {
   return { ...state, blocks, status: 'idle', compactCommandId: undefined }
 }
 
-interface ReplayIndexes {
-  readonly toolByCallId: Map<string, number>
-}
-
 function foldEvent(
   state: TranscriptState,
   event: SessionEvent,
@@ -250,14 +333,45 @@ function foldEvent(
   switch (event.type) {
     case 'turn/start':
       return { ...state, status: 'running', turn: event.data.turn, todos: [], compactCommandId: undefined }
+    case 'llm/retry': {
+      const blocks = editableBlocks(state, mutable)
+      hideFailedAttempt(blocks, event.data.turn, event.data.step, indexes)
+      const notice: Block = { kind: 'notice', level: 'info', text: formatRetryNotice(event) }
+      if (isRetryNotice(blocks[blocks.length - 1])) blocks[blocks.length - 1] = notice
+      else blocks.push(notice)
+      return { ...state, blocks, status: 'running', turn: event.data.turn }
+    }
     case 'turn/end': {
       const reason = event.data.reason
       const hasPending = state.blocks.some(isBlockPending)
-      const changesBlocks = hasPending || reason.kind === 'error' || reason.kind === 'aborted'
-      const blocks = changesBlocks ? editableBlocks(state, mutable) : state.blocks
+      const blocks = editableBlocks(state, mutable)
+      if (reason.kind === 'error') hideFailedAttempt(blocks, event.data.turn, undefined, indexes)
+      const droppedPartialTool = dropPartialToolPreviews(blocks, indexes)
+      settleUnfinishedToolCalls(blocks)
+      dropRetryNotice(blocks)
       if (hasPending) settlePendingBlocks(blocks, reason.kind === 'aborted')
+      else {
+        const settledLast = blocks[blocks.length - 1]
+        if (settledLast?.kind === 'assistant' && settledLast.streaming) {
+          blocks[blocks.length - 1] = { ...settledLast, streaming: false }
+        }
+      }
       if (reason.kind === 'error') {
         blocks.push({ kind: 'notice', level: 'error', text: 'error: ' + reason.error.code + ': ' + reason.error.message })
+      } else if (reason.kind === 'max-tokens') {
+        blocks.push({
+          kind: 'notice',
+          level: 'warning',
+          text: droppedPartialTool ? MAX_TOKENS_TOOL_NOTICE : MAX_TOKENS_NOTICE,
+        })
+      } else if (reason.kind === 'interrupted') {
+        blocks.push({
+          kind: 'notice',
+          level: 'warning',
+          text: droppedPartialTool ? INTERRUPTED_TOOL_NOTICE : INTERRUPTED_NOTICE,
+        })
+      } else if (reason.kind === 'blocked') {
+        blocks.push({ kind: 'notice', level: 'warning', text: 'Turn was blocked before the next model step could start.' })
       } else if (reason.kind === 'aborted') {
         const interruptedAssistant = blocks.some(block =>
           block.kind === 'assistant' && block.turn === event.data.turn && block.interrupted === true)
@@ -280,11 +394,10 @@ function foldEvent(
       const { turn, step, chunk } = event.data
       if (chunk.type === 'text-delta') {
         const blocks = editableBlocks(state, mutable)
-        const last = streamingBlock(state, turn, step)
-        if (last !== undefined) {
-          const idx = blocks.length - 1
-          const found = blocks[idx]
-          if (found?.kind === 'assistant') blocks[idx] = { ...found, text: found.text + chunk.text }
+        dropRetryNotice(blocks)
+        const last = blocks[blocks.length - 1]
+        if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
+          blocks[blocks.length - 1] = { ...last, text: last.text + chunk.text }
         } else {
           blocks.push({ kind: 'assistant', turn, step, text: chunk.text, reasoning: '', streaming: true })
         }
@@ -292,11 +405,10 @@ function foldEvent(
       }
       if (chunk.type === 'reasoning-delta') {
         const blocks = editableBlocks(state, mutable)
-        const last = streamingBlock(state, turn, step)
-        if (last !== undefined) {
-          const idx = blocks.length - 1
-          const found = blocks[idx]
-          if (found?.kind === 'assistant') blocks[idx] = { ...found, reasoning: found.reasoning + chunk.text }
+        dropRetryNotice(blocks)
+        const last = blocks[blocks.length - 1]
+        if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
+          blocks[blocks.length - 1] = { ...last, reasoning: last.reasoning + chunk.text }
         } else {
           blocks.push({ kind: 'assistant', turn, step, text: '', reasoning: chunk.text, streaming: true })
         }
@@ -304,6 +416,7 @@ function foldEvent(
       }
       if (chunk.type === 'tool-call-delta') {
         const blocks = editableBlocks(state, mutable)
+        dropRetryNotice(blocks)
         const index = indexes === undefined
           ? blocks.findIndex(block => block.kind === 'tool' && block.callId === chunk.id)
           : indexes.toolByCallId.get(chunk.id) ?? -1
@@ -349,6 +462,7 @@ function foldEvent(
         ...(presentation === undefined ? {} : { presentation }),
       }
       const blocks = editableBlocks(state, mutable)
+      dropRetryNotice(blocks)
       const partial = indexes === undefined
         ? blocks.findIndex(item => item.kind === 'tool' && item.callId === event.data.callId)
         : indexes.toolByCallId.get(event.data.callId) ?? -1
@@ -469,6 +583,8 @@ export interface ViewOptions {
   appName?: string
   /** Spinner phase while a turn or tool is running. */
   spinnerFrame?: number
+  /** Animation policy for streaming, activity marks, and the working label. */
+  motion?: MotionMode
   /** 24-bit color; defaults to off so tests stay deterministic. */
   trueColor?: boolean
   /** Shipped palette; defaults to dark. */
@@ -481,6 +597,10 @@ export interface ViewOptions {
   settings?: SettingsState
   /** `/copy` picker overlay; replaces the editor while open. */
   copySelector?: CopySelectorState
+  /** `/trajectory` full-screen event ledger. */
+  trajectory?: TrajectoryState
+  /** Keyboard-first full-screen descendant roster and inspector. */
+  agentHub?: AgentHubState
   /** Human-interaction selector; replaces the normal editor while active. */
   promptSelector?: PromptSelectorState
   /** Effective local + agent-scoped slash command catalog. */
@@ -605,6 +725,7 @@ function userBubble(text: string, theme: Theme, width: number): string[] {
 
 function toolIcon(status: ToolBlockStatus, theme: Theme, spinnerFrame: number): string {
   if (status === 'running') {
+    if (spinnerFrame < 0) return theme.fg('accent', SYMBOL.running)
     return theme.fg('accent', SPINNER[spinnerFrame % SPINNER.length] ?? SYMBOL.running)
   }
   if (status === 'ok') return theme.fg('success', SYMBOL.success)
@@ -719,12 +840,15 @@ export function blockLines(
   if (block.framed !== true) {
     const prefix = '  '
     const continuation = ' '.repeat(visibleWidth(prefix))
-    const tone = block.level === 'error' ? 'error' : 'dim'
+    const tone = block.level === 'error' ? 'error' : block.level === 'warning' ? 'warning' : 'dim'
     return wrapText(block.text, Math.max(1, width - visibleWidth(prefix))).map((line, index) =>
       truncateToWidth((index === 0 ? prefix : continuation) + theme.fg(tone, line), width))
   }
-  const state = block.level === 'error' ? 'error' : 'info'
-  const paint = (text: string): string => (block.level === 'error' ? theme.fg('error', text) : theme.fg('dim', text))
+  const state = block.level === 'error' ? 'error' : block.level === 'warning' ? 'warning' : 'info'
+  const paint = (text: string): string => theme.fg(
+    block.level === 'error' ? 'error' : block.level === 'warning' ? 'warning' : 'dim',
+    text,
+  )
   const wrapped = wrapText(block.text, Math.max(1, width - 4))
   const title = paint(wrapped[0] ?? '')
   return renderFramedBlock({
@@ -1091,6 +1215,7 @@ function subagentPreviewStart(agents: readonly TuiSubagentView[]): number {
 
 function subagentPhaseGlyph(phase: TuiSubagentPhase, theme: Theme, spinnerFrame: number): string {
   if (phase === 'running' || phase === 'starting') {
+    if (spinnerFrame < 0) return theme.fg('accent', SYMBOL.running)
     return theme.fg('accent', SPINNER[spinnerFrame % SPINNER.length] ?? SYMBOL.running)
   }
   if (phase === 'error') return theme.fg('error', SYMBOL.error)
@@ -1246,7 +1371,24 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   const appName = options.appName ?? 'omdsh'
   const version = options.version ?? '0.1.0'
   const pwd = options.pwd ?? ''
-  const spinnerFrame = options.spinnerFrame ?? 0
+  const motion = options.motion ?? 'full'
+  const spinnerFrame = motion === 'off' ? -1 : options.spinnerFrame ?? 0
+  if (options.agentHub !== undefined) {
+    const hub = renderAgentHub(options.agentHub, theme, width, height)
+    return {
+      lines: fitFrame(hub.lines, width),
+      cursor: hub.cursor,
+      cursorVisible: hub.cursorVisible,
+    }
+  }
+  if (options.trajectory !== undefined) {
+    const trajectory = renderTrajectory(options.trajectory, theme, width, height)
+    return {
+      lines: fitFrame(trajectory.lines, width),
+      cursor: trajectory.cursor,
+      cursorVisible: trajectory.cursorVisible,
+    }
+  }
   if (options.settings !== undefined && options.promptSelector === undefined) {
     const settings = renderSettings(options.settings, theme, width, height)
     return {
@@ -1308,9 +1450,9 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   }
 
   const working = state.status === 'running'
-    ? renderWorking(theme, spinnerFrame, undefined, width)
+    ? renderWorking(theme, Math.max(0, spinnerFrame), undefined, width, motion)
     : state.status === 'compacting'
-      ? renderWorking(theme, spinnerFrame, 'Compacting', width)
+      ? renderWorking(theme, Math.max(0, spinnerFrame), 'Compacting', width, motion)
       : []
   const statusBar = resolveStatusBarConfig(options.statusBar, options.statusPreset)
   const inlineHint = options.inspected === undefined

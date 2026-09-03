@@ -18,6 +18,10 @@ import {
 } from '../chrome/status-config.ts'
 import { THEME_NAMES, type ThemeName } from '../chrome/theme.ts'
 
+/** Available terminal animation policies. */
+export const MOTION_MODES = ['full', 'reduced', 'off'] as const
+export type MotionMode = typeof MOTION_MODES[number]
+
 /** Settings namespace owned by the local TUI provider. */
 export const TUI_SETTINGS_NAMESPACE = 'omdsh-tui'
 
@@ -25,9 +29,13 @@ export const TUI_SETTINGS_NAMESPACE = 'omdsh-tui'
 export interface TuiSettings {
   theme: ThemeName
   colors: boolean
+  motion: MotionMode
+  terminalProgress: boolean
   expandTools: boolean
   checkUpdates: boolean
   startupChangelog: StartupChangelogMode
+  notifications: 'off' | 'long-running' | 'always'
+  notificationThreshold: '15s' | '30s' | '1m' | '2m'
   statusBar?: StatusBarConfig
   /** Legacy input retained so older settings documents can be migrated. */
   statusPreset?: StatusPreset
@@ -37,9 +45,13 @@ export interface TuiSettings {
 export const TuiSettingsSchema: z<TuiSettings> = z.object({
   theme: z.union([...THEME_NAMES]).default('dark'),
   colors: z.boolean().default(true),
+  motion: z.union([...MOTION_MODES]).default('full'),
+  terminalProgress: z.boolean().default(false),
   expandTools: z.boolean().default(false),
   checkUpdates: z.boolean().default(true),
   startupChangelog: z.union([...STARTUP_CHANGELOG_MODES]).default('summary'),
+  notifications: z.union(['off', 'long-running', 'always'] as const).default('off'),
+  notificationThreshold: z.union(['15s', '30s', '1m', '2m'] as const).default('30s'),
   statusBar: z.union([z.object({
     enabled: z.boolean().default(true),
     labels: z.union([...STATUS_LABEL_STYLES]).default('compact'),

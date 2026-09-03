@@ -128,6 +128,7 @@ export async function materializeDotfilesHome(home, { cliproxyBaseUrl, env = pro
     copied.push(repoPath)
   }
   const pluginDir = join(home, 'omdsh')
+  // pnpm avoids npm 10 arborist crashing on dsh-observe 0.1.1's peer set.
   const install = spawnSync(
     'pnpm',
     ['install', '--ignore-scripts', '--prod'],

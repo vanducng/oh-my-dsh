@@ -7,3 +7,7 @@ dist/
 .DS_Store
 coverage/
 *.tsbuildinfo
+
+# apps/site generated content and build output
+apps/site/dist/
+apps/site/.astro/

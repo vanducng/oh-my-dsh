@@ -108,7 +108,7 @@ function emulatedScreenRows(output: string): string[] {
 }
 
 describe('LocalTui (tty)', () => {
-  it('repaints the footer when live Agent and tool controls change', () => {
+  it('repaints the footer when the live Agent control changes', () => {
     const term = new FakeTerminal()
     term.columns = 100
     const tui = new LocalTui(term, 'm', false)
@@ -117,7 +117,6 @@ describe('LocalTui (tty)', () => {
       recent: [],
       controls: {
         agentPreset: 'standard',
-        tools: 'native',
         plan: { active: false, pending: false },
       },
     })
@@ -128,12 +127,11 @@ describe('LocalTui (tty)', () => {
       recent: [],
       controls: {
         agentPreset: 'code',
-        tools: 'both',
         plan: { active: false, pending: false },
       },
     })
     const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
-    expect(screen).toContain('m · ptc · both')
+    expect(screen).toContain('m · ptc')
     expect(screen).not.toContain('m · standard')
     tui.dispose()
   })
@@ -202,7 +200,7 @@ describe('LocalTui (tty)', () => {
     tui.setSession({
       id: 'session-atomic',
       recent: [],
-      controls: { agentPreset: 'standard', tools: 'both' },
+      controls: { agentPreset: 'standard' },
     })
     expect(term.writes).toBe(before)
 
@@ -212,7 +210,7 @@ describe('LocalTui (tty)', () => {
     expect(term.writes).toBe(before + 1)
     expect(term.captured).toContain('deepseek-v4-pro')
     expect(term.captured).toContain('max')
-    expect(term.captured).toContain('standard · both')
+    expect(term.captured).toContain('standard')
     expect(term.captured).toContain('atomic session')
     tui.dispose()
   })
@@ -270,7 +268,7 @@ describe('LocalTui (tty)', () => {
       step: 1,
       chunk: { type: 'text-delta', index: 0, text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n') },
     }, 1))
-    await new Promise<void>(resolve => { setTimeout(resolve, 15) })
+    await new Promise<void>(resolve => { setTimeout(resolve, 50) })
     expect(term.captured).toContain('\x1b[?1049h')
     expect(term.captured).not.toContain('\x1b[?1049l')
     expect(term.captured).not.toContain('\x1b[3J')
@@ -795,6 +793,13 @@ describe('LocalTui (tty)', () => {
     if (process.platform === 'win32') return
     const term = new FakeTerminal()
     const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 0 })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
+    })
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
     try {
       tui.event(ev('assistant/chunk', {
@@ -839,6 +844,13 @@ describe('LocalTui (tty)', () => {
         term.output.write('\x1b[?1049hEDITOR\x1b[?1049lEDITOR-MAIN\r\n')
         return 'edited prompt'
       },
+    })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
     })
     tui.event(ev('assistant/chunk', {
       turn: 1,
@@ -894,39 +906,123 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('coalesces streamed assistant chunks but flushes settlement immediately', async () => {
+  it('reveals streamed assistant chunks smoothly but flushes settlement immediately', async () => {
     vi.useFakeTimers()
     try {
       const term = new FakeTerminal()
       const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 8 })
+      const stats = {
+        turns: 0,
+        steps: 0,
+        llmMs: 0,
+        toolMs: 0,
+        ttftMs: 0,
+        ttftSteps: 0,
+        decodeMs: 0,
+        decodeTokens: 0,
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }
+      tui.setSession({ id: 'streaming', recent: [], stats })
+      tui.setStatus('running')
       const initialWrites = term.writes
 
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'a' } }, 1))
+      tui.setSession({ id: 'streaming', recent: [], stats: { ...stats, outputTokens: 1 } })
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'b' } }, 2))
+      tui.setSession({ id: 'streaming', recent: [], stats: { ...stats, outputTokens: 2 } })
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'c' } }, 3))
+      tui.setSession({ id: 'streaming', recent: [], stats: { ...stats, outputTokens: 3 } })
       tui.setSession({
         id: 'session-stream',
         recent: [],
-        controls: { agentPreset: 'ptc', tools: 'code' },
+        controls: { agentPreset: 'ptc' },
       })
       expect(term.writes).toBe(initialWrites)
 
-      await vi.advanceTimersByTimeAsync(8)
+      await vi.advanceTimersByTimeAsync(34)
       expect(term.writes).toBe(initialWrites + 1)
       expect(term.captured).toContain('abc')
-      expect(stripAnsi(term.captured)).toContain('ptc · code')
+      expect(stripAnsi(term.captured)).toContain('ptc')
 
       tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'd' } }, 4))
       tui.event(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 5))
       expect(term.writes).toBe(initialWrites + 2)
       expect(term.captured).toContain('abcd')
 
-      await vi.advanceTimersByTimeAsync(8)
+      await vi.advanceTimersByTimeAsync(34)
       expect(term.writes).toBe(initialWrites + 2)
       tui.dispose()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('renders provider chunks directly with static activity when Motion is off', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 0 })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
+    })
+    tui.setStatus('running')
+    tui.event(ev('assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'text-delta', index: 0, text: 'direct chunk' },
+    }, 1))
+    const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
+    expect(screen).toContain('direct chunk')
+    expect(screen).toContain('⟳ Deep Driving')
+    tui.dispose()
+  })
+
+  it('mirrors busy state to opt-in native terminal progress and clears it', async () => {
+    vi.useFakeTimers()
+    try {
+      const term = new FakeTerminal()
+      const tui = new LocalTui(term, 'm', false)
+      tui.applyStoredPrefs({
+        theme: 'dark',
+        colors: false,
+        motion: 'off',
+        terminalProgress: true,
+        expandTools: false,
+      })
+      tui.event(ev('turn/start', { turn: 1 }, 1))
+      expect(term.captured.match(/\x1b\]9;4;3\x07/gu)).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(term.captured.match(/\x1b\]9;4;3\x07/gu)).toHaveLength(2)
+      tui.event(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 2))
+      expect(term.captured).toContain('\x1b]9;4;0;\x07')
+      tui.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses the durable turn ending reason in terminal notifications', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
+      notifications: 'always',
+      notificationThreshold: '30s',
+    })
+    tui.event(ev('turn/start', { turn: 1 }, 1))
+    tui.event(ev('turn/end', { turn: 1, reason: { kind: 'max-tokens' } }, 2))
+
+    expect(term.captured).toContain('omdsh needs attention: Output token limit reached after 0s')
+    tui.dispose()
   })
 
   it('skips a footer repaint when only non-visible session timing changes', () => {
@@ -1676,17 +1772,17 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('exposes the interactive /access command without a raw input hint', async () => {
+  it('exposes the interactive /permission command without a raw input hint', async () => {
     const term = new FakeTerminal()
     const tui = new LocalTui(term, 'm', false)
     tui.setCommands([
-      { name: 'access', description: 'Choose the session access level' },
+      { name: 'permission', description: 'Choose the session access level' },
     ])
     const pending = tui.readline()
     press(term, '/mode\r')
     expect(stripAnsi(term.captured)).toContain('unknown command: /mode')
-    press(term, '/access\r')
-    expect(await pending).toBe('/access')
+    press(term, '/permission\r')
+    expect(await pending).toBe('/permission')
     tui.dispose()
   })
 
@@ -1754,9 +1850,13 @@ describe('LocalTui (tty)', () => {
     expect(persisted).toEqual([{
       theme: 'light',
       colors: false,
+      motion: 'full',
+      terminalProgress: false,
       expandTools: false,
       checkUpdates: true,
       startupChangelog: 'summary',
+      notifications: 'off',
+      notificationThreshold: '30s',
       statusBar: {
         enabled: true,
         labels: 'compact',
@@ -1796,6 +1896,56 @@ describe('LocalTui (tty)', () => {
     expect(term.captured).not.toContain('Theme: dark')
     press(term, 'ok\r')
     expect(await pending).toBe('ok')
+    tui.dispose()
+  })
+
+  it('binds the product-owned Agent language section and persists its value', async () => {
+    const updates: Array<{ language: string }> = []
+    let publish: ((next: { language: 'auto' | 'zh-CN' | 'en' }) => void) | undefined
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    const unbind = tui.bindAgentBehaviorSettings({
+      get: () => ({ language: 'auto' }),
+      update: async next => { updates.push(next) },
+      watch: listener => {
+        publish = listener
+        return () => { publish = undefined }
+      },
+    })
+    void tui.readline()
+    press(term, '/settings\r')
+    press(term, '\t')
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain('● Agent')
+    press(term, '\x1b[C')
+    await flushAsyncPaste()
+    expect(updates).toEqual([{ language: 'zh-CN' }])
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain('Simplified Chinese')
+    publish?.({ language: 'en' })
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain('English')
+    unbind()
+    tui.dispose()
+  })
+
+  it('rolls back an optimistic Agent language change when persistence fails', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    tui.bindAgentBehaviorSettings({
+      get: () => ({ language: 'auto' }),
+      update: async () => { throw new Error('disk unavailable') },
+      watch: () => () => {},
+    })
+    void tui.readline()
+    press(term, '/settings\r')
+    press(term, '\t')
+    press(term, '\x1b[C')
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain('Simplified Chinese')
+    await flushAsyncPaste()
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain('Auto')
+    press(term, '\x1b')
+    await new Promise<void>(resolve => { setTimeout(resolve, 120) })
+    expect(emulatedScreenRows(term.captured).map(stripAnsi).join('\n')).toContain(
+      'Could not save Agent language: disk unavailable',
+    )
     tui.dispose()
   })
 
@@ -2032,7 +2182,7 @@ describe('LocalTui (tty)', () => {
     expect(term.captured).toContain('Enter open · Esc return')
     press(term, '\r')
     expect(term.captured).toContain('Agent Hub')
-    expect(term.captured).toContain('type to filter · ↑↓ navigate')
+    expect(term.captured).toContain('Enter transcript · Tab inspector')
     press(term, '\x1b[B')
     press(term, '\r')
     await flushAsyncPaste()
@@ -2123,6 +2273,39 @@ describe('LocalTui (tty)', () => {
         resolve()
       }, 120)
     })
+  })
+
+  it('does not route repeated Escape to the parent after closing an inspected subagent', async () => {
+    vi.useFakeTimers()
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    try {
+      let closed = 0
+      let interrupted = 0
+      tui.onInterrupt(() => { interrupted += 1 })
+      tui.onInspectClose(() => {
+        closed += 1
+        tui.setInspectedSubagent(undefined)
+        tui.setStatus('running')
+      })
+      tui.setInspectedSubagent({ id: 'child-1', label: 'Explore auth', phase: 'running', writable: false })
+
+      press(term, '\x1b')
+      await vi.advanceTimersByTimeAsync(81)
+      expect(closed).toBe(1)
+
+      press(term, '\x1b')
+      await vi.advanceTimersByTimeAsync(81)
+      expect(interrupted).toBe(0)
+
+      press(term, '\x0c')
+      press(term, '\x1b')
+      await vi.advanceTimersByTimeAsync(81)
+      expect(interrupted).toBe(1)
+    } finally {
+      tui.dispose()
+      vi.useRealTimers()
+    }
   })
 
   it('does not type SGR mouse reports into the editor', async () => {

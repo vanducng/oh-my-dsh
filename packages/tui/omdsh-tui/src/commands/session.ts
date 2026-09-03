@@ -1,6 +1,8 @@
 /** Session lifecycle and inspection commands registered through dsh-commands. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -8,7 +10,9 @@ import type {} from '../runtime/session-runtime.ts'
 import { registerCommands } from './registration.ts'
 import { formatRelativeAge } from '../chrome/relative-time.ts'
 import { formatPermission, formatTokens } from '../chrome/status-line.ts'
-import { formatAgentPreset, formatToolPresentation } from '../session/session-configuration.ts'
+import { formatAgentPreset } from '../session/session-configuration.ts'
+import { readPinnedSessions, sortSessionRows, togglePinnedSession, writePinnedSessions } from '../session/session-library.ts'
+import { contextDiagnosticsMarkdown } from '../session/context-diagnostics.ts'
 
 export const name = 'omdsh-command-session'
 export const inject = ['commands', 'omdshSession', 'tui']
@@ -39,40 +43,67 @@ async function resumeSession(ctx: Context, invocation: CommandInvocation): Promi
   await ctx.omdshSession.refreshRecent()
   let id = invocation.rawInput.trim()
   if (id === '') {
-    const recent = ctx.omdshSession.recentSessions
-    if (recent.length === 0) return { kind: 'success', text: 'No durable sessions found.' }
-    const answer = await ctx.tui.prompt({
-      title: 'Resume Session',
-      question: '',
-      options: recent.map(row => ({
-        label: row.title,
-        value: row.id,
-        ...(row.preview === undefined ? {} : { preview: row.preview }),
-        description: [
-          formatRelativeAge(row.updatedAt ?? row.createdAt),
-          ...(row.eventCount === undefined ? [] : [`${row.eventCount} events`]),
-        ].join(' · '),
-        ...(row.status === undefined
-          ? {}
-          : {
-              badge: {
-                label: row.status,
-                tone: row.status === 'done'
-                  ? 'success' as const
-                  : row.status === 'failed'
-                    ? 'error' as const
-                    : 'warning' as const,
-              },
-            }),
-      })),
-      presentation: 'fullscreen-list',
-      filterable: true,
-      allowCustom: false,
-      signal: invocation.signal,
-    })
-    if (answer === null) return { kind: 'success' }
-    const index = /^\d+$/u.test(answer) ? Number(answer) - 1 : -1
-    id = index >= 0 ? (recent[index]?.id ?? answer) : answer
+    const dshHome = process.env.OMDSH_HOME ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
+    const pinsPath = join(dshHome, 'omdsh', 'session-library.json')
+    let pinned = readPinnedSessions(pinsPath)
+    while (id === '') {
+      const recent = sortSessionRows(ctx.omdshSession.recentSessions, pinned)
+      if (recent.length === 0) return { kind: 'success', text: 'No durable sessions found.' }
+      const answer = await ctx.tui.prompt({
+        title: 'Session Library',
+        question: '',
+        options: recent.map(row => ({
+          label: `${pinned.includes(row.id) ? '◆ ' : ''}${row.title}`,
+          value: row.id,
+          ...(row.preview === undefined ? {} : { preview: row.preview }),
+          description: [
+            ...(pinned.includes(row.id) ? ['pinned'] : []),
+            formatRelativeAge(row.updatedAt ?? row.createdAt),
+            ...(row.eventCount === undefined ? [] : [`${row.eventCount} events`]),
+          ].join(' · '),
+          ...(row.status === undefined
+            ? {}
+            : {
+                badge: {
+                  label: row.status,
+                  tone: row.status === 'done'
+                    ? 'success' as const
+                    : row.status === 'failed'
+                      ? 'error' as const
+                      : 'warning' as const,
+                },
+              }),
+        })),
+        actions: [
+          { key: 'r', label: 'rename', valuePrefix: 'rename:' },
+          { key: 'p', label: 'pin/unpin', valuePrefix: 'pin:' },
+        ],
+        presentation: 'fullscreen-list',
+        filterable: true,
+        allowCustom: false,
+        signal: invocation.signal,
+      })
+      if (answer === null) return { kind: 'success' }
+      if (answer.startsWith('pin:')) {
+        pinned = togglePinnedSession(pinned, answer.slice('pin:'.length))
+        writePinnedSessions(pinsPath, pinned)
+        continue
+      }
+      if (answer.startsWith('rename:')) {
+        const target = answer.slice('rename:'.length)
+        const row = recent.find(item => item.id === target)
+        if (row === undefined) continue
+        const title = await ctx.tui.prompt({
+          title: 'Rename Session',
+          question: `New title for “${row.title}”`,
+          allowCustom: true,
+          signal: invocation.signal,
+        })
+        if (title !== null) await ctx.omdshSession.renameSession(invocation.agent, target, title, invocation.signal)
+        continue
+      }
+      id = answer
+    }
   }
   if (id === invocation.agent.id) return { kind: 'success', text: 'That session is already active.' }
   try {
@@ -104,7 +135,6 @@ function showSession(ctx: Context, invocation: CommandInvocation): CommandResult
       `| Reasoning | \`${reasoningEffort ?? 'not available'}\` |`,
       `| Agent | ${formatAgentPreset(controls.agentPreset ?? 'standard')} |`,
       `| Workflow | ${workflow} |`,
-      `| Tools | ${formatToolPresentation(controls.tools ?? 'native')} |`,
       ...(controls.permission === undefined ? [] : [`| Access | ${formatPermission(controls.permission)} |`]),
       `| Activity | ${stats.turns} turns · ${stats.steps} steps |`,
       `| Tokens | ${formatTokens(stats.inputTokens)} in · ${formatTokens(stats.outputTokens)} out |`,
@@ -122,6 +152,14 @@ async function retry(ctx: Context, invocation: CommandInvocation): Promise<Comma
     return { kind: 'success', text: 'Re-running the most recent human prompt as a new turn.' }
   }
   return { kind: 'success', text: 'No human prompt is available to retry.' }
+}
+
+function showContext(ctx: Context, invocation: CommandInvocation): CommandResult {
+  if (invocation.rawInput.trim() !== '') return { kind: 'error', text: 'Usage: /context' }
+  return {
+    kind: 'success',
+    text: contextDiagnosticsMarkdown(ctx.omdshSession.contextDiagnostics(invocation.agent)),
+  }
 }
 
 function showTodo(invocation: CommandInvocation): CommandResult {
@@ -144,6 +182,7 @@ function showTodo(invocation: CommandInvocation): CommandResult {
 
 export function apply(ctx: Context): void {
   registerCommands(ctx, [
+    { name: 'context', description: 'Inspect projection-backed context usage', handler: invocation => showContext(ctx, invocation) },
     { name: 'new', description: 'Start a new session', handler: invocation => newSession(ctx, invocation) },
     {
       name: 'resume',
@@ -151,6 +190,7 @@ export function apply(ctx: Context): void {
       input: { hint: '[session-id]' },
       handler: invocation => resumeSession(ctx, invocation),
     },
+    { name: 'sessions', description: 'Open the durable Session Library', handler: invocation => resumeSession(ctx, invocation) },
     { name: 'session', description: 'Show current session details', handler: invocation => showSession(ctx, invocation) },
     { name: 'retry', description: 'Run the most recent human prompt again', handler: invocation => retry(ctx, invocation) },
     { name: 'todo', description: 'Show the current session todo list', handler: showTodo },

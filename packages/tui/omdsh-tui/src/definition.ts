@@ -12,7 +12,6 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import type { ToolPresentationMode } from '@deepseek-ai/dsh-tools'
 import type { TuiToolPresentation } from './chrome/tool-renderers.ts'
 
 /** Context service name providers publish under. */
@@ -51,6 +50,13 @@ export interface TuiPrompt {
     /** Optional semantic badge painted after the description. */
     badge?: { label: string; tone: 'success' | 'warning' | 'error' | 'muted' }
   }[]
+  /** Optional single-key actions applied to the active option while the filter is empty. */
+  actions?: readonly {
+    key: string
+    label: string
+    /** Prefix returned before the selected option value. */
+    valuePrefix: string
+  }[]
   multiSelect?: boolean
   allowCustom?: boolean
   /** Mask custom input while retaining the real value only in the prompt editor. */
@@ -74,8 +80,6 @@ export interface TuiPrompt {
 export interface TuiSessionControls {
   /** Harness Agent preset mounted for this session. */
   agentPreset?: string
-  /** How the Harness tool registry is exposed to the model. */
-  tools?: ToolPresentationMode
   /** Logged Plan Mode state, including a selection awaiting the next step boundary. */
   plan?: { active: boolean; pending: boolean }
   /** Effective permission preset, such as workspace-write or danger-full-access. */
@@ -115,6 +119,9 @@ export interface TuiSubagentView {
   readonly mode?: 'one-shot' | 'continuable'
   readonly phase: TuiSubagentPhase
   readonly activity: readonly TuiSubagentActivity[]
+  /** First and latest durable event timestamps for elapsed-time presentation. */
+  readonly startedAt?: number
+  readonly updatedAt?: number
 }
 
 /** Live descendant roster for the active root session. */
@@ -184,6 +191,18 @@ export interface TuiSubmission {
   images: readonly TuiInputImage[]
 }
 
+/** Product-owned language preference projected into the settings overlay. */
+export interface TuiAgentBehaviorSettings {
+  language: 'auto' | 'zh-CN' | 'en'
+}
+
+/** Closed binding between the product settings owner and the terminal surface. */
+export interface TuiAgentBehaviorSettingsBinding {
+  get(): TuiAgentBehaviorSettings
+  update(next: TuiAgentBehaviorSettings): Promise<void>
+  watch(listener: (next: TuiAgentBehaviorSettings) => void): () => void
+}
+
 /**
  * Terminal presentation service.
  * Implementations must be single-consumer: one runner owns readInput().
@@ -205,10 +224,14 @@ export interface TuiService {
   setTools(tools: readonly { name: string; description: string }[]): void
   /** Replace commands contributed by the active agent's Harness scope. */
   setCommands(commands: readonly TuiCommand[]): void
+  /** Open a keyboard-driven event ledger for the active session. */
+  openTrajectory(events: readonly SessionEvent[]): boolean
   /** Append a direct UI/command result without fabricating a session event. */
   notice(text: string, options?: TuiNoticeOptions): void
   /** Append one successful plugin command result using the command-output surface. */
   commandOutput(command: string, text: string): void
+  /** Bind the product-owned Agent settings section; only one binding may be active. */
+  bindAgentBehaviorSettings?(binding: TuiAgentBehaviorSettingsBinding): () => void
   /** Temporarily own the composer and collect one human answer. */
   prompt(request: TuiPrompt): Promise<string | null>
   /** Replace the transcript when a new or resumed session becomes active. */

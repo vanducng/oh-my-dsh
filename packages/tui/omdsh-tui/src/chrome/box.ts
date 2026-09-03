@@ -4,7 +4,8 @@
  * @module @vanducng/dsh-tui
  */
 
-import { BOX, DEEPSEEK_LOGO, gradientLogo, type Theme, type ThemeColor } from './theme.ts'
+import { BOX, DEEPSEEK_LOGO, SYMBOL, gradientLogo, type Theme, type ThemeColor } from './theme.ts'
+import type { MotionMode } from '../session/tui-settings.ts'
 import { expandTabs, padToWidth, padding, truncateToWidth, visibleWidth, wrapIndexed, wrapText, cursorOnWrapped } from './width.ts'
 import { formatRelativeAge } from './relative-time.ts'
 import { WELCOME_TIPS, type WelcomeTip } from './welcome-tips.ts'
@@ -131,7 +132,8 @@ export function renderWelcome(options: WelcomeOptions, theme: Theme): string[] {
   const dualContentWidth = boxWidth - 3
   const minLeft = visibleWidth(DEEPSEEK_LOGO[0]) + 2
   const minRight = 20
-  const desiredLeft = Math.min(26, Math.max(minLeft, Math.floor(dualContentWidth * 0.35)))
+  const baselineLeft = Math.min(26, Math.max(minLeft, Math.floor(dualContentWidth * 0.35)))
+  const desiredLeft = Math.max(baselineLeft, visibleWidth(options.model) + 2)
   const showRight = dualContentWidth >= minRight + minLeft
   const leftCol = showRight ? Math.min(desiredLeft, dualContentWidth - minRight) : boxWidth - 2
   const rightCol = showRight ? Math.max(1, dualContentWidth - leftCol) : 0
@@ -317,11 +319,14 @@ export function renderWorking(
   spinnerFrame: number,
   action = DEEP_DRIVING_LABEL,
   width?: number,
+  motion: MotionMode = 'full',
 ): string[] {
-  const frame = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][spinnerFrame % 10] ?? '⠋'
+  const frame = motion === 'off'
+    ? SYMBOL.running
+    : ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][spinnerFrame % 10] ?? '⠋'
   const prefix = ' ' + theme.fg('accent', frame) + ' '
   const hint = ' ' + theme.fg('dim', '⟨Ctrl+C: Interrupt⟩')
-  const paintAction = (text: string): string => action === DEEP_DRIVING_LABEL
+  const paintAction = (text: string): string => action === DEEP_DRIVING_LABEL && motion === 'full'
     ? renderDrivingShimmer(theme, text, spinnerFrame)
     : theme.fg('muted', text)
   if (width === undefined) return [prefix + paintAction(action) + hint]

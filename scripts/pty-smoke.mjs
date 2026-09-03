@@ -4,7 +4,7 @@
 // quits with double Ctrl-C and asserts the resume hint.
 // Run: node scripts/pty-smoke.mjs
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -31,12 +31,31 @@ const spawnCmd = process.env.OMDSH_RUN_MODE === 'built'
   ? [process.execPath, ['apps/omdsh/lib/bin.js']]
   : ['pnpm', ['--dir', 'apps/omdsh', 'omdsh']]
 
+const smokeEnv = {
+  ...process.env,
+  OMDSH_HOME: omdshHome,
+  DEEPSEEK_API_KEY: 'sk-invalid-key-for-smoke',
+  NO_COLOR: '1',
+}
+const seeded = spawnSync(spawnCmd[0], spawnCmd[1], {
+  cwd: root,
+  input: 'Recent header seed\n',
+  encoding: 'utf8',
+  timeout: 120_000,
+  env: smokeEnv,
+})
+if (seeded.status !== 0) {
+  console.error('FAIL: could not seed a durable recent session')
+  console.error((seeded.stdout ?? '') + (seeded.stderr ?? ''))
+  process.exit(1)
+}
+
 const term = pty.spawn(spawnCmd[0], spawnCmd[1], {
   name: 'xterm-256color',
   cols: 80,
   rows: 30,
   cwd: root,
-  env: { ...process.env, OMDSH_HOME: omdshHome, DEEPSEEK_API_KEY: 'sk-invalid-key-for-smoke', NO_COLOR: '1' },
+  env: smokeEnv,
 })
 
 let out = ''
@@ -68,25 +87,13 @@ if (!(await waitFor(() => cleanOutput(out.slice(mark)).includes('Choose the Agen
 }
 term.write('\x1b[B')
 term.write('\r')
-if (!(await waitFor(() => cleanOutput(out).includes('Agent: PTC · Tools: Code'), 'PTC preset'))) {
+if (!(await waitFor(() => cleanOutput(out).includes('Agent: PTC'), 'PTC preset'))) {
   term.kill()
   process.exit(1)
 }
-if (!(await waitFor(() => cleanOutput(out.slice(mark)).includes('ptc · code'), 'PTC footer'))) {
+if (!(await waitFor(() => cleanOutput(out.slice(mark)).includes('ptc'), 'PTC footer'))) {
   console.error('FAIL: Agent switch did not refresh the footer')
   console.error(cleanOutput(out.slice(mark)).slice(-2000))
-  term.kill()
-  process.exit(1)
-}
-mark = out.length
-term.write('/tool-mode\r')
-if (!(await waitFor(() => cleanOutput(out.slice(mark)).includes('Choose how tools are exposed to the model'), 'Tools selector'))) {
-  term.kill()
-  process.exit(1)
-}
-term.write('\x1b[B')
-term.write('\r')
-if (!(await waitFor(() => cleanOutput(out).includes('Tools: Both'), 'Both tool presentation'))) {
   term.kill()
   process.exit(1)
 }
@@ -98,7 +105,7 @@ if (!(await waitFor(() => cleanOutput(out.slice(mark)).includes('Choose the Agen
 }
 term.write('\x1b[B')
 term.write('\r')
-if (!(await waitFor(() => cleanOutput(out).includes('Agent: Minimal · Tools: Native'), 'Minimal preset'))) {
+if (!(await waitFor(() => cleanOutput(out).includes('Agent: Minimal'), 'Minimal preset'))) {
   term.kill()
   process.exit(1)
 }
@@ -123,7 +130,7 @@ if (!(await waitFor(() => cleanOutput(out.slice(mark)).includes('Choose the Agen
 }
 term.write('\x1b[B')
 term.write('\r')
-if (!(await waitFor(() => cleanOutput(out).includes('Agent: Cordis · Tools: Native'), 'Cordis preset'))) {
+if (!(await waitFor(() => cleanOutput(out).includes('Agent: Cordis'), 'Cordis preset'))) {
   console.error(cleanOutput(out).slice(-2500))
   term.kill()
   process.exit(1)
@@ -139,14 +146,14 @@ if (!(await waitFor(() => cleanOutput(out).includes('Workflow: Plan'), 'Plan wor
   term.kill()
   process.exit(1)
 }
-term.write('/access\r')
-if (!(await waitFor(() => cleanOutput(out).includes('Choose how omdsh may access your workspace'), 'access selector'))) {
+term.write('/permission\r')
+if (!(await waitFor(() => cleanOutput(out).includes('Choose how omdsh may access your workspace'), 'permission selector'))) {
   term.kill()
   process.exit(1)
 }
 term.write('\x1b[A')
 term.write('\r')
-if (!(await waitFor(() => cleanOutput(out).includes('Access: Read only'), 'access switch'))) {
+if (!(await waitFor(() => cleanOutput(out).includes('Access: Read only'), 'permission switch'))) {
   term.kill()
   process.exit(1)
 }
@@ -181,15 +188,16 @@ term.kill()
 
 const clean = cleanOutput(out)
 const ok = exitCode === 0
+  && clean.includes('Recent sessions')
+  && clean.includes('Recent header seed')
   && clean.includes('hi')
   && clean.includes('error:')
   && clean.includes('deepseek-v4-flash')
   && hasReasoningEffort(clean)
-  && clean.includes('Agent: PTC · Tools: Code')
-  && clean.includes('ptc · code')
-  && clean.includes('Tools: Both')
-  && clean.includes('Agent: Minimal · Tools: Native')
-  && clean.includes('Agent: Cordis · Tools: Native')
+  && clean.includes('Agent: PTC')
+  && clean.includes('ptc')
+  && clean.includes('Agent: Minimal')
+  && clean.includes('Agent: Cordis')
   && clean.includes('Workflow: Plan')
   && clean.includes('Access: Read only')
   && clean.includes('Rewind Conversation')

@@ -192,7 +192,7 @@ describe('applyEvent', () => {
       kind: 'tool',
       callId: 'call-1',
       status: 'error',
-      output: 'interrupted before a result',
+      output: 'No durable tool result was recorded before the turn ended. The tool\'s outcome is unknown.',
     }))
     expect(view(state).livePinned).toBe(false)
   })
@@ -212,6 +212,369 @@ describe('applyEvent', () => {
       { kind: 'tool', callId: 'call-1', name: 'bash', args: '{}', status: 'error', output: 'interrupted before a result' },
     ])
     expect(view(settled).livePinned).toBe(false)
+  })
+
+  it('settles max-token truncation without leaving an unexecuted tool preview', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('assistant/chunk', {
+        turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'I will update it.' },
+      }, 2),
+      ev('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'tool-call-delta', id: 'call-1', name: 'write', argumentsDelta: '{"path":"large.ts","content":"partial' },
+      }, 3),
+      ev('assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'text', text: 'I will update it.' }] },
+      }, 4),
+      ev('turn/end', { turn: 1, reason: { kind: 'max-tokens' } }, 5),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+
+    expect(live.status).toBe('idle')
+    expect(live.blocks).toEqual([
+      { kind: 'assistant', turn: 1, step: 1, text: 'I will update it.', reasoning: '', streaming: false },
+      {
+        kind: 'notice',
+        level: 'warning',
+        text: 'Output token limit reached. A partial tool call was not executed because its arguments may be incomplete. Send “continue” to resume.',
+      },
+    ])
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it('does not keep an empty assistant block after a tool-only max-token truncation', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"command":"partial' },
+      }, 2),
+      ev('assistant/message', { turn: 1, step: 1, message: { content: [] } }, 3),
+      ev('turn/end', { turn: 1, reason: { kind: 'max-tokens' } }, 4),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+
+    expect(live.blocks).toEqual([{
+      kind: 'notice',
+      level: 'warning',
+      text: 'Output token limit reached. A partial tool call was not executed because its arguments may be incomplete. Send “continue” to resume.',
+    }])
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it.each([
+    {
+      label: 'cancelled',
+      reason: { kind: 'aborted', reason: { kind: 'user' } },
+      notice: { kind: 'notice', level: 'info', text: 'interrupted' },
+    },
+    {
+      label: 'crash-repaired',
+      reason: { kind: 'interrupted' },
+      notice: {
+        kind: 'notice',
+        level: 'warning',
+        text: 'Session was interrupted before completion. A partial tool call was not executed.',
+      },
+    },
+  ])('removes an unexecuted tool preview when a turn is $label', ({ reason, notice }) => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"command":"partial' },
+      }, 2),
+      ev('turn/end', { turn: 1, reason }, 3),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+
+    expect(live.blocks).toEqual([notice])
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it('settles a dispatched tool even when a later block makes it non-trailing', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{"command":"long task"}' }, 2),
+      ev('assistant/message', {
+        turn: 1,
+        step: 2,
+        message: { content: [{ type: 'text', text: 'The driver stopped.' }] },
+      }, 3),
+      ev('turn/end', {
+        turn: 1,
+        reason: { kind: 'error', error: { code: 'INTERNAL', message: 'driver stopped' } },
+      }, 4),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+    const tool = live.blocks.find((block): block is Extract<typeof block, { kind: 'tool' }> => block.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      callId: 'call-1',
+      status: 'error',
+      output: 'No durable tool result was recorded before the turn ended. The tool\'s outcome is unknown.',
+    })
+    expect(live.blocks.some(block => block.kind === 'tool' && block.status === 'running')).toBe(false)
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it('preserves a trailing dispatched tool while settling its unknown outcome', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{"command":"long task"}' }, 2),
+      ev('turn/end', {
+        turn: 1,
+        reason: { kind: 'error', error: { code: 'INTERNAL', message: 'driver stopped' } },
+      }, 3),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+
+    expect(live.blocks[0]).toMatchObject({
+      kind: 'tool',
+      callId: 'call-1',
+      status: 'error',
+      output: 'No durable tool result was recorded before the turn ended. The tool\'s outcome is unknown.',
+    })
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it('drops an undurable tool preview even when a malformed log says the turn completed', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"command":"partial' },
+      }, 2),
+      ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 3),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+
+    expect(live.blocks).toEqual([])
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it('hides failed retry partials and keeps one terminal error after retries are exhausted', () => {
+    let state = initialTranscript()
+    state = applyEvent(state, ev('turn/start', { turn: 1 }, 1))
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial-1' },
+    }, 2))
+    state = applyEvent(state, ev('llm/retry', {
+      retryId: 'retry-1',
+      turn: 1,
+      step: 1,
+      provider: 'mock',
+      mode: 'normal',
+      policyKey: 'normal',
+      retry: 1,
+      maxRetries: 2,
+      delayMs: 10,
+      failure: { message: 'busy one', code: 'SERVER' },
+    }, 3))
+    expect(state.blocks).toEqual([
+      { kind: 'notice', level: 'info', text: 'retrying SERVER (1/2)' },
+    ])
+    state = applyEvent(state, ev('llm/retry-started', {
+      retryId: 'retry-1', turn: 1, step: 1, retry: 1,
+    }, 4))
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial-2' },
+    }, 5))
+    state = applyEvent(state, ev('llm/retry', {
+      retryId: 'retry-1',
+      turn: 1,
+      step: 1,
+      provider: 'mock',
+      mode: 'normal',
+      policyKey: 'normal',
+      retry: 2,
+      maxRetries: 2,
+      delayMs: 20,
+      failure: { message: 'busy two', code: 'SERVER' },
+    }, 6))
+    state = applyEvent(state, ev('turn/end', {
+      turn: 1,
+      reason: { kind: 'error', error: { message: 'busy three', code: 'SERVER' } },
+    }, 7))
+    expect(state.blocks).toEqual([
+      { kind: 'notice', level: 'error', text: 'error: SERVER: busy three' },
+    ])
+  })
+
+  it('replaces a retried attempt with the recovered assistant message', () => {
+    let state = initialTranscript()
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'failed' },
+    }, 1))
+    state = applyEvent(state, ev('llm/retry', {
+      retryId: 'retry-1',
+      turn: 1,
+      step: 1,
+      provider: 'mock',
+      mode: 'normal',
+      policyKey: 'normal',
+      retry: 1,
+      maxRetries: 5,
+      delayMs: 10,
+      failure: { message: 'stream closed', code: 'TRANSPORT' },
+    }, 2))
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'recovered' },
+    }, 3))
+    state = applyEvent(state, ev('assistant/message', {
+      turn: 1, step: 1, message: { content: [{ type: 'text', text: 'recovered' }] },
+    }, 4))
+    state = applyEvent(state, ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 5))
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', turn: 1, step: 1, text: 'recovered', reasoning: '', streaming: false },
+    ])
+  })
+
+  it('drops a trailing partial tool from a failed retry attempt', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('assistant/chunk', {
+        turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'calling' },
+      }, 2),
+      ev('assistant/chunk', {
+        turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"cmd"' },
+      }, 3),
+      ev('llm/retry', {
+        retryId: 'retry-1',
+        turn: 1,
+        step: 1,
+        provider: 'mock',
+        mode: 'normal',
+        policyKey: 'normal',
+        retry: 1,
+        maxRetries: 2,
+        delayMs: 10,
+        failure: { message: 'stream closed', code: 'TRANSPORT' },
+      }, 4),
+      ev('turn/end', {
+        turn: 1,
+        reason: { kind: 'error', error: { message: 'still closed', code: 'TRANSPORT' } },
+      }, 5),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+    expect(live.blocks).toEqual([
+      { kind: 'notice', level: 'error', text: 'error: TRANSPORT: still closed' },
+    ])
+    expect(replayEvents(events)).toEqual(live)
+    const recovered = replayEvents([
+      ...events.slice(0, 4),
+      ev('assistant/chunk', {
+        turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"cmd":"true"}' },
+      }, 6),
+      ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{"cmd":"true"}' }, 7),
+    ])
+    const tool = recovered.blocks.find(block => block.kind === 'tool')
+    expect(tool).toMatchObject({ callId: 'call-1', status: 'running', name: 'bash' })
+    expect(recovered.blocks.some(block => block.kind === 'tool' && block.partial === true)).toBe(false)
+  })
+
+  it('drops a retried attempt that starts with a tool-call-delta and then fails', () => {
+    const events = [
+      ev('turn/start', { turn: 1 }, 1),
+      ev('assistant/chunk', {
+        turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"cmd"' },
+      }, 2),
+      ev('llm/retry', {
+        retryId: 'retry-1',
+        turn: 1,
+        step: 1,
+        provider: 'mock',
+        mode: 'normal',
+        policyKey: 'normal',
+        retry: 1,
+        maxRetries: 2,
+        delayMs: 10,
+        failure: { message: 'stream closed', code: 'TRANSPORT' },
+      }, 3),
+      ev('assistant/chunk', {
+        turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"cmd"' },
+      }, 4),
+      ev('turn/end', {
+        turn: 1,
+        reason: { kind: 'error', error: { message: 'still closed', code: 'TRANSPORT' } },
+      }, 5),
+    ]
+    const live = events.reduce((state, event) => applyEvent(state, event), initialTranscript())
+    expect(live.blocks).toEqual([
+      { kind: 'notice', level: 'error', text: 'error: TRANSPORT: still closed' },
+    ])
+    expect(replayEvents(events)).toEqual(live)
+  })
+
+  it('drops the retry notice when a recovered assistant/message arrives without a chunk', () => {
+    let state = initialTranscript()
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'failed' },
+    }, 1))
+    state = applyEvent(state, ev('llm/retry', {
+      retryId: 'retry-1',
+      turn: 1,
+      step: 1,
+      provider: 'mock',
+      mode: 'normal',
+      policyKey: 'normal',
+      retry: 1,
+      maxRetries: 5,
+      delayMs: 10,
+      failure: { message: 'empty', code: 'EMPTY_RESPONSE' },
+    }, 2))
+    expect(state.blocks).toEqual([
+      { kind: 'notice', level: 'info', text: 'retrying EMPTY_RESPONSE (1/5)' },
+    ])
+    state = applyEvent(state, ev('assistant/message', {
+      turn: 1, step: 1, message: { content: [{ type: 'text', text: 'recovered' }] },
+    }, 3))
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', turn: 1, step: 1, text: 'recovered', reasoning: '', streaming: false },
+    ])
+  })
+
+  it('drops the retry notice when a recovered tool-call-delta arrives', () => {
+    let state = initialTranscript()
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"cmd"' },
+    }, 1))
+    state = applyEvent(state, ev('llm/retry', {
+      retryId: 'retry-1',
+      turn: 1,
+      step: 1,
+      provider: 'mock',
+      mode: 'normal',
+      policyKey: 'normal',
+      retry: 1,
+      maxRetries: 5,
+      delayMs: 10,
+      failure: { message: 'stream closed', code: 'TRANSPORT' },
+    }, 2))
+    expect(state.blocks).toEqual([
+      { kind: 'notice', level: 'info', text: 'retrying TRANSPORT (1/5)' },
+    ])
+    state = applyEvent(state, ev('assistant/chunk', {
+      turn: 1, step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'bash', argumentsDelta: '{"cmd":"true"}' },
+    }, 3))
+    expect(state.blocks).toEqual([
+      {
+        kind: 'tool',
+        callId: 'call-1',
+        name: 'bash',
+        args: '{"cmd":"true"}',
+        status: 'running',
+        output: '',
+        partial: true,
+      },
+    ])
   })
 
   it('tracks tool calls to ok and error results', () => {
@@ -465,14 +828,16 @@ describe('blockLines', () => {
     const error = blockLines({ kind: 'notice', level: 'error', text: 'Resume failed.' }, theme, 60)
     const colorTheme = createTheme(true, true)
     const coloredInfo = blockLines({ kind: 'notice', level: 'info', text: 'Status\ndetail' }, colorTheme, 60)
+    const coloredWarning = blockLines({ kind: 'notice', level: 'warning', text: 'Output limit reached.' }, colorTheme, 60)
     const coloredError = blockLines({ kind: 'notice', level: 'error', text: 'Status' }, colorTheme, 60)
     const panel = blockLines({ kind: 'notice', level: 'info', text: 'Panel\ndetail', framed: true }, theme, 60)
 
-    for (const lines of [multiline, error, coloredInfo, coloredError]) {
+    for (const lines of [multiline, error, coloredInfo, coloredWarning, coloredError]) {
       expect(lines.join('\n')).not.toMatch(/[╭│╰]/u)
       expect(stripAnsi(lines[0] ?? '')).toMatch(/^  /u)
     }
     expect(stripAnsi(error[0] ?? '')).toBe('  Resume failed.')
+    expect(coloredWarning[0]).toContain(colorTheme.getFgAnsi('warning'))
     expect(coloredError[0]).toContain(colorTheme.getFgAnsi('error'))
     expect(panel.join('\n')).toMatch(/[╭╰]/u)
     expect(stripAnsi(panel[0] ?? '')).toMatch(/^╭─── Panel /u)

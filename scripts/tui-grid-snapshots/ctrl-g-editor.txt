@@ -4,5 +4,5 @@
 ╭─ 🐳 ─────────────────────────────────────────────────────── workspace write ─╮
 │ grid-edited                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-  deepseek-v4-flash · high · ptc · both   $WORKSPACE · main
+  deepseek-v4-flash · high · ptc   $WORKSPACE · main
   Ctx 0% · 0/1M                                              0 turns · 0 steps

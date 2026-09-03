@@ -35,7 +35,7 @@ import type {} from '@deepseek-ai/dsh-session-projection'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/types'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
-import type { ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
+import type { ContextBreakdownProjection, ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-reference'
 import type {} from '@deepseek-ai/dsh-file-reference'
@@ -55,23 +55,23 @@ import { descendantDepth, isSteerableSubagent, SubagentRoster } from './subagent
 import type {} from '../runtime/tool-presentation.ts'
 import * as commandPermission from '../commands/permission.ts'
 import {
-  defaultToolPresentation,
   isBlankSession,
-  resolveToolPresentation,
-  type SessionConfiguration,
+  toolPresentationForPreset,
 } from './session-configuration.ts'
 import { stripComposerImageMarkers } from '../input/image-paste.ts'
+import type { ContextDiagnostics } from './context-diagnostics.ts'
 
 interface ActiveSession {
   handle: AgentHandle
   selection: ModelSelectionRef
   contextWindow: number | undefined
   reasoningEffort: string | undefined
-  configuration: SessionConfiguration
+  agentPreset: string
   disposeToolPresentation: () => void
 }
 
-interface ConfiguredAgentContext extends SessionConfiguration {
+interface ConfiguredAgentContext {
+  agentPreset: string
   disposeToolPresentation: () => void
 }
 
@@ -84,10 +84,9 @@ async function setupAgentContext(agentCtx: Context, selection: ModelSelectionRef
   if (agentPresets === undefined || tools === undefined) throw new Error('agent configuration services are unavailable')
   const agentPreset = resolveSessionPreset(agent.session) ?? agentPresets.defaultId
   const mounted = await agentPresets.mount(agentCtx, agentPreset)
-  const presentation = resolveToolPresentation(agent.session.events, mounted.id)
-  const disposeToolPresentation = tools.presentAs(presentation.tools)
+  const disposeToolPresentation = tools.presentAs(toolPresentationForPreset(mounted.id))
   await agentCtx.plugin(commandPermission)
-  return { agentPreset: mounted.id, ...presentation, disposeToolPresentation }
+  return { agentPreset: mounted.id, disposeToolPresentation }
 }
 
 function parseControl(line: string): { name: string; input: string } | undefined {
@@ -101,6 +100,7 @@ export interface TuiStatsProjection {
   sessionStats?: SessionStatsProjection
   tokenUsage?: TokenUsageProjection
   contextPressure?: ContextPressureProjection
+  contextBreakdown?: ContextBreakdownProjection
   plan?: PlanProjection
   permissions?: PermissionSelect
 }
@@ -125,7 +125,12 @@ export function modelStatus(
   }
 }
 
-/** Fold a complete log as the capability-absence fallback for projections. */
+/**
+ * Fold a complete log as the capability-absence fallback for projections.
+ * Remaining fallbacks: elapsed time from first/last event timestamps, and the
+ * whole stats/token fold when `sessionStats`, `tokenUsage`, or context pressure
+ * is missing from the client-visible snapshot.
+ */
 export function sessionStats(
   events: readonly SessionEvent[],
   contextWindow?: number,
@@ -257,6 +262,15 @@ export function sessionStats(
   }
 }
 
+/**
+ * Streaming deltas do not change footer-visible totals. Projection change
+ * notifications own first-token and usage updates; settlement refreshes the
+ * fallback fold when projections are absent.
+ */
+export function shouldRefreshSessionInfoAfter(event: SessionEvent): boolean {
+  return event.type !== 'assistant/chunk'
+}
+
 function explicitSessionTitle(events: readonly SessionEvent[]): string | undefined {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]
@@ -375,7 +389,7 @@ interface RestoreAttachmentStore {
   readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
 }
 
-/** Persist draft images as one batch, then build one mixed user message. */
+/** Admit one ordered image batch, then build one atomic mixed user message. */
 export async function createSubmissionMessage(
   submission: TuiSubmission,
   attachments?: SubmissionAttachmentStore,
@@ -386,7 +400,7 @@ export async function createSubmissionMessage(
     ...(image.name === undefined ? {} : { name: image.name }),
   }))
   if (inputs.length > 0 && attachments === undefined) throw new Error('Attachment storage is not configured.')
-  const refs = inputs.length === 0 || attachments === undefined
+  const refs: ImageAttachmentRef[] = inputs.length === 0 || attachments === undefined
     ? []
     : [...await attachments.saveImages(inputs)]
   const content = [
@@ -508,7 +522,7 @@ export class SessionRuntime {
         if (this.#inspectedId === undefined) {
           tui.event(event, ctx.get('tuiToolPresentation')?.event(active.handle.agent, event))
         }
-        this.#pushSessionInfo()
+        if (shouldRefreshSessionInfoAfter(event)) this.#pushSessionInfo()
         if (event.type === 'session/title') void this.refreshRecent()
         return
       }
@@ -531,7 +545,7 @@ export class SessionRuntime {
     if (projections !== undefined) {
       this.#off.push(projections.onChanged((session, key) => {
         if (session !== this.#active?.handle.agent.session) return
-        if (key === 'sessionStats' || key === 'tokenUsage' || key === 'contextPressure'
+        if (key === 'sessionStats' || key === 'tokenUsage' || key === 'contextPressure' || key === 'contextBreakdown'
           || key === 'plan' || key === 'permissions') this.#pushSessionInfo()
       }))
     }
@@ -562,13 +576,13 @@ export class SessionRuntime {
       signal?.throwIfAborted()
       const defaults = this.#ctx.get('agentDefaultModel')?.currentSelection()
       if (defaults === undefined) throw new Error('agent default model is unavailable')
+      await this.refreshRecent()
+      signal?.throwIfAborted()
       const next = options.resumeId === undefined
         ? await this.#create(defaults)
         : await this.#resume(defaults, options.resumeId, signal ?? new AbortController().signal)
       signal?.throwIfAborted()
       await this.#activate(next, signal)
-      signal?.throwIfAborted()
-      await this.refreshRecent()
       signal?.throwIfAborted()
     } catch (error: unknown) {
       this.#started = false
@@ -695,6 +709,30 @@ export class SessionRuntime {
     await this.refreshRecent()
   }
 
+  /** Rename a live or durable top-level session through the public log-backed title service. */
+  async renameSession(agent: Agent, id: string, title: string, signal: AbortSignal): Promise<void> {
+    this.assertActive(agent)
+    if (id === agent.id) {
+      this.#ctx.sessionTitle.rename(agent.session, title)
+      await this.refreshRecent()
+      return
+    }
+    const selection = this.selection(agent)
+    const ref: ModelSelectionRef = { current: selection, assembled: undefined }
+    const handle = await this.#ctx.agents.resume({
+      resumeSessionId: SessionId(id),
+      agentOptions: { provider: selection.provider, model: selection.model },
+      signal,
+      setup: async (agentCtx) => { await setupAgentContext(agentCtx, ref) },
+    })
+    try {
+      this.#ctx.sessionTitle.rename(handle.agent.session, title)
+    } finally {
+      await handle.dispose()
+    }
+    await this.refreshRecent()
+  }
+
   /** Fork before a selected human turn and restore that message as an editable draft. */
   async rewindToTurn(signal: AbortSignal): Promise<void> {
     const agent = this.#requiredAgent()
@@ -769,7 +807,7 @@ export class SessionRuntime {
         ...(agent.session.header.cwd === undefined ? {} : { cwd: agent.session.header.cwd }),
         parentSession: agent.id,
         seedLength: selected.branchIndex,
-        agentPreset: active.configuration.agentPreset,
+        agentPreset: active.agentPreset,
       },
       agentOptions: { provider: selection.provider, model: selection.model },
       signal,
@@ -786,17 +824,12 @@ export class SessionRuntime {
       await handle.dispose()
       throw new Error('forked agent was published without session configuration')
     }
-    this.#pinToolPresentation(handle.agent, configuration)
     await this.#activate({
       handle,
       selection: ref,
       contextWindow: undefined,
       reasoningEffort: undefined,
-      configuration: {
-        agentPreset: configuration.agentPreset,
-        tools: configuration.tools,
-        toolsSource: configuration.toolsSource,
-      },
+      agentPreset: configuration.agentPreset,
       disposeToolPresentation: configuration.disposeToolPresentation,
     })
     this.#tui.restoreInput({ text, images })
@@ -811,13 +844,24 @@ export class SessionRuntime {
     return this.#stats(this.#requiredActive())
   }
 
+  /** Current client-visible context projections, read as one consistent snapshot. */
+  contextDiagnostics(agent: Agent = this.#requiredAgent()): ContextDiagnostics {
+    this.assertActive(agent)
+    const projection = this.#projection(this.#requiredActive())
+    return {
+      ...(projection?.contextPressure === undefined ? {} : { pressure: { ...projection.contextPressure } }),
+      ...(projection?.tokenUsage === undefined ? {} : { usage: { ...projection.tokenUsage } }),
+      ...(projection?.contextBreakdown === undefined ? {} : { breakdown: { ...projection.contextBreakdown } }),
+    }
+  }
+
   /** Effective reasoning effort after applying the selected model's adapter default. */
   reasoningEffort(agent: Agent = this.#requiredAgent()): string | undefined {
     this.assertActive(agent)
     return this.#requiredActive().reasoningEffort
   }
 
-  /** Harness-owned workflow/access state plus creation-time Agent/tool configuration. */
+  /** Harness-owned workflow/access state plus the creation-time Agent preset. */
   controls(agent: Agent = this.#requiredAgent()): TuiSessionControls {
     this.assertActive(agent)
     const active = this.#requiredActive()
@@ -831,46 +875,30 @@ export class SessionRuntime {
       || left.id.localeCompare(right.id))
   }
 
-  /** Recompose one blank session and restore that preset's recommended tool presentation. */
-  async changeAgentPreset(agent: Agent, id: string): Promise<SessionConfiguration> {
+  /** Recompose one blank session, including the preset's fixed tool exposure. */
+  async changeAgentPreset(agent: Agent, id: string): Promise<string> {
     this.assertActive(agent)
     if (!isBlankSession(agent.session)) {
       throw new Error('Agent is locked after the first prompt. Start /new, then choose the Agent before sending a message.')
     }
     const active = this.#requiredActive()
-    if (active.configuration.agentPreset === id) return { ...active.configuration }
-    const previousPreset = active.configuration.agentPreset
+    if (active.agentPreset === id) return active.agentPreset
+    const previousPreset = active.agentPreset
     const preset = await this.#ctx.agentPresets.recompose(agent.ctx, id)
     try {
-      this.#replaceToolPresentation(active, defaultToolPresentation(preset.id), 'preset-default')
+      this.#replaceToolPresentation(active, toolPresentationForPreset(preset.id))
     } catch (error: unknown) {
       await this.#ctx.agentPresets.recompose(agent.ctx, previousPreset)
       throw error
     }
-    active.configuration.agentPreset = preset.id
+    active.agentPreset = preset.id
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
     this.#pushTools()
     this.#pushCommands()
     await this.#refreshSkills()
     this.#replaceTranscript(agent)
     this.#pushSessionInfo()
-    return { ...active.configuration }
-  }
-
-  /** Change how one blank session exposes its real Harness tool registry to the model. */
-  changeToolPresentation(agent: Agent, mode: ToolPresentationMode): SessionConfiguration {
-    this.assertActive(agent)
-    if (!isBlankSession(agent.session)) {
-      throw new Error('Tools are locked after the first prompt. Start /new, then choose the tool presentation before sending a message.')
-    }
-    const active = this.#requiredActive()
-    if (active.configuration.tools !== mode || active.configuration.toolsSource !== 'user') {
-      this.#replaceToolPresentation(active, mode, 'user')
-      this.#pushTools()
-      this.#replaceTranscript(agent)
-      this.#pushSessionInfo()
-    }
-    return { ...active.configuration }
+    return active.agentPreset
   }
 
   /** Select the Harness Plan Mode controller and immediately refresh terminal state. */
@@ -907,10 +935,8 @@ export class SessionRuntime {
           eventCount: inspected.events.length,
           ...(status === undefined ? {} : { status }),
         })
-        if (rows.length >= 8) break
       } catch {
         rows.push({ id: header.id, title: '(unavailable session)', createdAt: header.createdAt })
-        if (rows.length >= 8) break
       }
     }
     this.#recent = rows
@@ -949,17 +975,12 @@ export class SessionRuntime {
       await handle.dispose()
       throw new Error('created agent was published without session configuration')
     }
-    this.#pinToolPresentation(handle.agent, configuration)
     return {
       handle,
       selection: ref,
       contextWindow: undefined,
       reasoningEffort: undefined,
-      configuration: {
-        agentPreset: configuration.agentPreset,
-        tools: configuration.tools,
-        toolsSource: configuration.toolsSource,
-      },
+      agentPreset: configuration.agentPreset,
       disposeToolPresentation: configuration.disposeToolPresentation,
     }
   }
@@ -978,17 +999,12 @@ export class SessionRuntime {
       await handle.dispose()
       throw new Error('resumed agent was published without session configuration')
     }
-    this.#pinToolPresentation(handle.agent, configuration)
     return {
       handle,
       selection: ref,
       contextWindow: undefined,
       reasoningEffort: undefined,
-      configuration: {
-        agentPreset: configuration.agentPreset,
-        tools: configuration.tools,
-        toolsSource: configuration.toolsSource,
-      },
+      agentPreset: configuration.agentPreset,
       disposeToolPresentation: configuration.disposeToolPresentation,
     }
   }
@@ -1010,7 +1026,10 @@ export class SessionRuntime {
     this.#tui.setInspectedSubagent(undefined)
     this.#tui.setStatus(agent.status)
     this.#syncSubagents()
-    if (previous !== undefined) this.#replaceTranscript(agent)
+    // Seed welcome metadata before replaceSession commits the startup header to
+    // native scrollback; later updates cannot rewrite that frozen first frame.
+    this.#pushSessionInfo()
+    this.#replaceTranscript(agent)
     this.#pushTools()
     const selected = this.selection(agent)
     const info = await this.#resolveModelInfo(selected)
@@ -1022,7 +1041,6 @@ export class SessionRuntime {
     await this.#refreshSkills()
     signal?.throwIfAborted()
     this.#pushSessionInfo()
-    if (previous === undefined) this.#replaceTranscript(agent)
     if (previous !== undefined) this.#retired.push(previous.handle)
   }
 
@@ -1179,21 +1197,8 @@ export class SessionRuntime {
     })
   }
 
-  #pinToolPresentation(agent: Agent, configuration: SessionConfiguration): void {
-    const selected = resolveToolPresentation(agent.session.events, configuration.agentPreset)
-    if (agent.session.events.some(event => event.type === 'omdsh/tools-selected')) return
-    agent.session.append('omdsh/tools-selected', {
-      mode: selected.tools,
-      source: selected.toolsSource,
-    })
-  }
-
-  #replaceToolPresentation(
-    active: ActiveSession,
-    mode: ToolPresentationMode,
-    source: SessionConfiguration['toolsSource'],
-  ): void {
-    const previousMode = active.configuration.tools
+  #replaceToolPresentation(active: ActiveSession, mode: ToolPresentationMode): void {
+    const previousMode = toolPresentationForPreset(active.agentPreset)
     active.disposeToolPresentation()
     try {
       const tools = active.handle.agent.ctx.get('tools')
@@ -1205,9 +1210,6 @@ export class SessionRuntime {
       active.disposeToolPresentation = tools.presentAs(previousMode)
       throw error
     }
-    active.configuration.tools = mode
-    active.configuration.toolsSource = source
-    active.handle.agent.session.append('omdsh/tools-selected', { mode, source })
   }
 
   #replaceTranscript(agent: Agent): void {
@@ -1321,15 +1323,14 @@ export class SessionRuntime {
     const livePlan = this.#ctx.get('planMode')?.get(active.handle.agent)
     return {
       ...controls,
-      agentPreset: active.configuration.agentPreset,
-      tools: active.configuration.tools,
+      agentPreset: active.agentPreset,
       ...(livePlan === undefined
         ? {}
         : { plan: { active: livePlan.active, pending: livePlan.pending !== undefined } }),
     }
   }
 
-  /** Read one consistent projection cut, with the complete-log fold as fallback. */
+  /** Read one client-visible snapshot. Host-only projection state is never consulted. */
   #projection(active: ActiveSession): TuiStatsProjection | undefined {
     return this.#ctx.get('sessionProjections')?.snapshot(active.handle.agent.session).values
   }

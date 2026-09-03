@@ -15,6 +15,10 @@
 
   - id: llm-deepseek
     name: '@deepseek-ai/dsh-llm-deepseek'
+    config:
+      # Current built-ins share this fallback. Exact catalog values still win,
+      # and omitting models keeps future adapter additions visible.
+      maxTokens: 384000
 
   - id: session
     name: '@deepseek-ai/dsh-session'
@@ -93,6 +97,12 @@
     name: '@deepseek-ai/dsh-credentials-local'
     config:
       dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
+
+  - id: authorization
+    name: '@deepseek-ai/dsh-authorization'
+
+  - id: authorization-invariant
+    name: '@deepseek-ai/dsh-authorization/invariant'
 
   # Dormant multi-provider twin: zero extra picker routes until a `llm-pi-ai:`
   # settings section supplies profiles. /login writes those profiles; /model
@@ -269,6 +279,9 @@
     config:
       model: !!js process.env.OMDSH_MODEL || 'deepseek-v4-flash'
 
+  - id: agent-behavior
+    name: '@vanducng/oh-my-dsh/agent-behavior'
+
   - id: tui-tool-presentation
     name: '@vanducng/dsh-tui/tool-presentation'
 
@@ -298,6 +311,9 @@
 
   - id: tui-command-export
     name: '@vanducng/dsh-tui/command-export'
+
+  - id: tui-command-trajectory
+    name: '@vanducng/dsh-tui/command-trajectory'
 
   - id: tui-command-integrations
     name: '@vanducng/dsh-tui/command-integrations'

@@ -12,7 +12,7 @@
 
 </div>
 
-![oh-my-dsh 终端界面](docs/resources/screenshot.webp)
+![oh-my-dsh 终端界面](apps/site/public/screenshot.webp)
 
 ## 快速开始
 
@@ -27,26 +27,29 @@ omdsh
 
 ## 功能亮点
 
-- **持久化对话：** 支持恢复会话、回退到指定用户轮次、重试、压缩，并将完整对话导出为 Markdown。
-- **四项真实会话控制：** 选择 Harness Agent preset（Standard、PTC、Minimal 或 Cordis）、Workflow（Default 或 Plan）、工具展示（Native、Code 或 Both）和 Access（Read only、Workspace write 或 Full access）。
+- **持久化对话：** 在 `/sessions` 中搜索、置顶、重命名和恢复会话，并支持回退、重试、压缩，以及将完整对话导出为 Markdown 或独立 HTML。
+- **三项真实会话控制：** 选择 Harness Agent preset（Standard、PTC、Minimal 或 Cordis）、Workflow（Default 或 Plan）和 Access（Read only、Workspace write 或 Full access）。每个 Agent preset 自己决定工具暴露方式；PTC 会自动使用生成的 TypeScript SDK。
 - **丰富的终端输入：** 使用 `@` 提及项目文件和其他会话，粘贴剪贴板图片，复用持久输入历史，通过外部编辑器处理多行 Prompt，并取回排队中的后续消息。
 - **清晰的工具活动：** 跟踪流式工具调用和子智能体的实时进展，在空 composer 中按 `↓` 再按 `Enter`（或直接按 `Alt+A`）进入键盘驱动的 Agent Hub 并选择子智能体，从其对话里直接跟进可续写任务，查看独立的 Input 和 Output 分区，展开长输出，并让工具插件继续拥有领域展示语义。
-- **实时运行上下文：** 无需离开 Composer，即可查看 Agent、Workflow、Tools、Access、模型、推理强度、工作区、Git 状态、上下文压力、Token、TTFT、吞吐率、缓存、耗时、轮次和步骤。
+- **实时运行上下文：** 无需离开 Composer，即可查看 Agent、Workflow、Access、模型、推理强度、工作区、Git 状态、上下文压力、Token、TTFT、吞吐率、缓存、耗时、轮次和步骤；使用 `/context` 可以在 transcript 中直接查看并保留基于 Projection 的构成明细。
 - **为响应速度而设计：** 复用已完成的 Transcript 布局、保留终端原生 Scrollback、只输出发生变化的终端行，并正确处理 CJK 文本和 emoji 的显示宽度。
 
 ## 学习指南
 
-- [教程](docs/tutorials.zh-CN.md) — 完成第一个任务、提供精确上下文、引导队列任务、恢复长会话、定制工作环境，并编写可安装插件。
-- [Skills 与 MCP](docs/skills-and-mcp.zh-CN.md) — 使用可复用指令和外部工具扩展项目。
-- [用户插件](docs/plugins.zh-CN.md) — 用 `omdsh plugin` 把 DSH bundle 装进 omdsh Profile。
-- [架构](docs/architecture.zh-CN.md) — 了解插件边界与运行时数据流。
-- [性能](docs/performance.zh-CN.md) — 查看 Benchmark、测试方法与渲染优化。
+完整文档同时发布在[文档站点](https://vanducng.github.io/oh-my-dsh/)。
+
+- [教程](https://vanducng.github.io/oh-my-dsh/zh/docs/tutorials/) — 完成第一个任务、提供精确上下文、引导队列任务、恢复长会话、定制工作环境，并编写可安装插件。
+- [Skills 与 MCP](https://vanducng.github.io/oh-my-dsh/zh/docs/skills-and-mcp/) — 使用可复用指令和外部工具扩展项目。
+- [用户插件](https://vanducng.github.io/oh-my-dsh/zh/docs/plugins/) — 用 `omdsh plugin` 把 DSH bundle 装进 omdsh Profile。
+- [架构](https://vanducng.github.io/oh-my-dsh/zh/docs/architecture/) — 了解插件边界与运行时数据流。
+- [性能](https://vanducng.github.io/oh-my-dsh/zh/docs/performance/) — 查看 Benchmark、测试方法与渲染优化。
+- [报告问题或提出功能建议](https://github.com/vanducng/oh-my-dsh/issues/new/choose) — 使用引导表单提供版本、运行环境、复现步骤及脱敏后的上下文。
 
 ## 为什么做 oh-my-dsh
 
 DeepSeek Harness 提供了能力完整的 Agent Runtime，也带来了一条很重要的架构原则：一切皆插件。oh-my-dsh 将这套运行时带入安静、键盘驱动的终端体验，同时不创造第二套 Agent Core，也不使用平行抽象将 Harness 隐藏起来。
 
-TUI 始终只是表现层与交互层。会话、工具、权限、模型、Skills、MCP Server、命令和遥测数据来自 Harness Service 与插件；omdsh 负责将它们组合为终端应用，并补充舒适使用这些能力所需的界面行为。
+TUI 始终只是表现层与交互层。会话、工具、权限、模型、Skills、MCP Server、命令和遥测数据来自 Harness Service 与插件；omdsh 负责将它们组合为终端应用，并补充舒适使用这些能力所需的界面行为。`/trajectory` 会打开键盘驱动的事件账本，提供 Turn/Step 分组、实时跟随、搜索、折叠、耗时、Token 用量以及工具 Payload、Result 和 Schema 检查。`/context` 与状态栏读取同一套客户端可见 Harness Projection，并明确区分由提供方数据锚定的占用量和启发式 Prompt 构成估算。
 
 项目遵循四项原则：
 
@@ -69,21 +72,29 @@ DeepSeek Harness 插件与服务
  @vanducng/oh-my-dsh — 启动与插件组合
 ```
 
-TUI 软件包拆分为 Service Definition、本地终端 Provider、会话与交互适配器、工具展示适配桥、命令贡献插件和交互式 Runner。这让终端所有权与 Harness 领域状态相互隔离，也只在能力拥有独立生命周期或所有者时公开插件边界。当前边界与数据流请参阅[架构概览](docs/architecture.zh-CN.md)。
+TUI 软件包拆分为 Service Definition、本地终端 Provider、会话与交互适配器、工具展示适配桥、命令贡献插件和交互式 Runner。这让终端所有权与 Harness 领域状态相互隔离，也只在能力拥有独立生命周期或所有者时公开插件边界。当前边界与数据流请参阅[架构概览](https://vanducng.github.io/oh-my-dsh/zh/docs/architecture/)。
 
 ## 性能
 
 性能是 TUI 架构本身的一部分：持久化会话按线性时间回放，Harness Projection 避免重复扫描历史，已完成的 Transcript 区块会保留格式化布局，终端写入器则只输出发生变化的行。在报告所用的 Apple M5 Pro 环境中，恢复 10,000 轮对话的中位耗时为 2.62 ms，恢复 10,000 次工具调用为 22.71 ms，在 5,000 轮对话界面上进行缓存更新的平均耗时为每帧 0.35 ms。
 
-完整方法与限制请参阅可复现的 [TUI 性能报告](docs/performance.zh-CN.md)，也可以在本地运行 `pnpm benchmark:tui`。
+完整方法与限制请参阅可复现的 [TUI 性能报告](https://vanducng.github.io/oh-my-dsh/zh/docs/performance/)，也可以在本地运行 `pnpm benchmark:tui`。
 
 ## 配置
 
-运行 `/login` 可以配置一家提供方的 API Key。DeepSeek 仍会打开官方 Key 管理页、验证 Key，并让这份存储凭据优先于继承的 `DEEPSEEK_API_KEY`。同一条命令也可以激活 OpenAI、Anthropic 等 catalog 提供方，或添加自定义提供方（自己的 id、Base URL、协议和模型 id）。之后 `/model` 会列出所有已激活的路由。`/logout` 会删除由 omdsh 管理的选择；对 DeepSeek 而言，环境变量可用时会回退到环境变量。
+运行 `/login` 可以配置一家提供方。DeepSeek 仍会打开官方 Key 管理页、验证 Key，并让这份存储凭据优先于继承的 `DEEPSEEK_API_KEY`。当已挂载的提供方注册了 Harness 授权流程时，`/login` 会列出该流程及其方法，终端只渲染流程要求的通知和提问。同一条命令也可以激活 catalog API Key 提供方，或添加自定义提供方（自己的 id、Base URL、协议和模型 id）。之后 `/model` 会列出所有已激活的路由。`/logout` 会删除由 omdsh 管理的选择；对 DeepSeek 而言，环境变量可用时会回退到环境变量。
 
-模型配置也可以来自 `$DSH_HOME/settings.yaml`。Skills 与 MCP 的配置方式请参阅 [Skills 与 MCP](docs/skills-and-mcp.zh-CN.md)。
+模型配置也可以来自 `$DSH_HOME/settings.yaml`。使用 `/model favorite` 和 `/model unfavorite` 维护本地快速切换列表，再用 `Ctrl+P`/`Alt+P` 前后切换模型，使用 `Ctrl+T` 切换推理强度。Skills 与 MCP 的配置方式请参阅 [Skills 与 MCP](https://vanducng.github.io/oh-my-dsh/zh/docs/skills-and-mcp/)。
 
-升级后，omdsh 可以在启动时只展示一次版本说明。使用 `/changelog` 查看近期条目，或使用 `/changelog full` 查看随包发布的完整历史。程序每天至多执行一次带缓存的 npm 版本检查，只提示新版本而不会自动安装；这两项行为都可以在 `/settings` 中调整。
+升级后，omdsh 可以在启动时只展示一次版本说明。使用 `/changelog` 查看近期条目，或使用 `/changelog full` 查看随包发布的完整历史。程序每天至多执行一次带缓存的 npm 版本检查，只提示新版本而不会自动安装；这两项行为都可以在 `/settings` 中调整。长任务完成和等待人工输入的终端通知也在这里配置，并且默认关闭。
+
+以下命令不会启动 TUI 或访问网络，可直接生成 Shell 补全脚本：
+
+```sh
+omdsh completions bash
+omdsh completions zsh
+omdsh completions fish
+```
 
 ## 开发
 

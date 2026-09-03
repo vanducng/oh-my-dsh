@@ -39,10 +39,10 @@ Mount the exports you need as ordinary Cordis plugins. The working application c
 
 ## Documentation
 
-- [Architecture](https://github.com/vanducng/oh-my-dsh/blob/main/docs/architecture.md)
-- [Skills and MCP](https://github.com/vanducng/oh-my-dsh/blob/main/docs/skills-and-mcp.md)
-- [User plugins](https://github.com/vanducng/oh-my-dsh/blob/main/docs/plugins.md)
-- [Performance](https://github.com/vanducng/oh-my-dsh/blob/main/docs/performance.md)
+- [Architecture](https://vanducng.github.io/oh-my-dsh/docs/architecture/)
+- [Skills and MCP](https://vanducng.github.io/oh-my-dsh/docs/skills-and-mcp/)
+- [User plugins](https://vanducng.github.io/oh-my-dsh/docs/plugins/)
+- [Performance](https://vanducng.github.io/oh-my-dsh/docs/performance/)
 - [Changelog](https://github.com/vanducng/oh-my-dsh/blob/main/CHANGELOG.md)
 
 ## License

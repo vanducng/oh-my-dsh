@@ -12,6 +12,44 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, '')
 }
 
+function isWideEmojiSymbol(cp: number): boolean {
+  return (
+    (cp >= 0x231a && cp <= 0x231b)
+    || (cp >= 0x23e9 && cp <= 0x23ec)
+    || cp === 0x23f0
+    || cp === 0x23f3
+    || (cp >= 0x25fd && cp <= 0x25fe)
+    || (cp >= 0x2614 && cp <= 0x2615)
+    || (cp >= 0x2648 && cp <= 0x2653)
+    || cp === 0x267f
+    || cp === 0x2693
+    || cp === 0x26a1
+    || (cp >= 0x26aa && cp <= 0x26ab)
+    || (cp >= 0x26bd && cp <= 0x26be)
+    || (cp >= 0x26c4 && cp <= 0x26c5)
+    || cp === 0x26ce
+    || cp === 0x26d4
+    || cp === 0x26ea
+    || (cp >= 0x26f2 && cp <= 0x26f3)
+    || cp === 0x26f5
+    || cp === 0x26fa
+    || cp === 0x26fd
+    || cp === 0x2705
+    || (cp >= 0x270a && cp <= 0x270b)
+    || cp === 0x2728
+    || cp === 0x274c
+    || cp === 0x274e
+    || (cp >= 0x2753 && cp <= 0x2755)
+    || cp === 0x2757
+    || (cp >= 0x2795 && cp <= 0x2797)
+    || cp === 0x27b0
+    || cp === 0x27bf
+    || (cp >= 0x2b1b && cp <= 0x2b1c)
+    || cp === 0x2b50
+    || cp === 0x2b55
+  )
+}
+
 /** East-Asian / emoji / combining-mark cell width of one code point. */
 export function charWidth(cp: number): number {
   if (cp === 0) return 0
@@ -30,6 +68,7 @@ export function charWidth(cp: number): number {
     || (cp >= 0xfe30 && cp <= 0xfe6f)
     || (cp >= 0xff00 && cp <= 0xff60)
     || (cp >= 0xffe0 && cp <= 0xffe6)
+    || isWideEmojiSymbol(cp)
     || (cp >= 0x1f300 && cp <= 0x1f64f)
     || (cp >= 0x1f900 && cp <= 0x1f9ff)
     || (cp >= 0x1fa00 && cp <= 0x1faff)
@@ -220,6 +259,89 @@ export function wrapText(text: string, width: number): string[] {
     if (line !== '') out.push(line)
   }
   return out.length > 0 ? out : ['']
+}
+
+/** Tracked SGR attributes carried across wrapped visual rows. */
+interface SgrState {
+  /** Last opened foreground escape (e.g. `\x1b[31m`, `\x1b[38;2;...m`) or '' when reset to default. */
+  fg: string
+  inverse: boolean
+  bold: boolean
+  italic: boolean
+}
+
+const SGR_PARAM_RE = /\x1b\[([0-9;]*)m/g
+
+/** Apply one SGR escape to `state`, returning the new state. */
+function applySgr(state: SgrState, params: string): SgrState {
+  if (params === '') return { fg: '', inverse: false, bold: false, italic: false }
+  const codes = params.split(';').map(Number)
+  for (let i = 0; i < codes.length; i += 1) {
+    const code = codes[i] ?? 0
+    if (code === 0) return { fg: '', inverse: false, bold: false, italic: false }
+    if (code === 39) return { ...state, fg: '' }
+    if (code === 7) state = { ...state, inverse: true }
+    else if (code === 27) state = { ...state, inverse: false }
+    else if (code === 1) state = { ...state, bold: true }
+    else if (code === 22) state = { ...state, bold: false }
+    else if (code === 3) state = { ...state, italic: true }
+    else if (code === 23) state = { ...state, italic: false }
+    else if (code === 38) {
+      // 38;...m foreground sequence (256-color or truecolor): consume the rest.
+      state = { ...state, fg: `\x1b[${params}m` }
+      break
+    } else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+      state = { ...state, fg: `\x1b[${code}m` }
+    }
+  }
+  return state
+}
+
+/** Build the reopen sequence that restores `state` at a continuation start. */
+function reopenSgr(state: SgrState): string {
+  let out = state.fg
+  if (state.bold) out += '\x1b[1m'
+  if (state.italic) out += '\x1b[3m'
+  if (state.inverse) out += '\x1b[7m'
+  return out
+}
+
+/**
+ * Reopen active SGR (foreground, inverse, bold, italic) at the start of each
+ * continuation row. `wrapText` keeps ANSI attached to the following glyph but
+ * does not synthesize a reopening sequence when a row closes an attribute and
+ * the next row begins with plain text — so narrow wrapped styled rows lose
+ * their semantic color or inverse at line breaks. This restabilizes each row
+ * by tracking the SGR state accumulated from all preceding rows and prepending
+ * the reopen sequence. No-op for unstyled or single-row output.
+ */
+export function restabilizeWrapSegments(segments: readonly string[]): string[] {
+  if (segments.length <= 1) return [...segments]
+  const out: string[] = [segments[0] ?? '']
+  let state: SgrState = { fg: '', inverse: false, bold: false, italic: false }
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i] ?? ''
+    // Reopen the state accumulated from *prior* rows before this row's own
+    // escapes run, so the continuation inherits the active style rather than
+    // re-applying escapes that already occur in this row.
+    if (i > 0) {
+      const reopen = reopenSgr(state)
+      out.push(reopen === '' ? seg : reopen + seg)
+    }
+    SGR_PARAM_RE.lastIndex = 0
+    for (const match of seg.matchAll(SGR_PARAM_RE)) {
+      state = applySgr(state, match[1] ?? '')
+    }
+  }
+  return out
+}
+
+/**
+ * Word-wrap styled `text` to `width` and restabilize SGR at every continuation
+ * row so foreground, inverse, bold, and italic attributes survive line breaks.
+ */
+export function wrapTextStable(text: string, width: number): string[] {
+  return restabilizeWrapSegments(wrapText(text, width))
 }
 
 /** One wrapped row with its source-index span in the original (unstyled) string. */

@@ -59,6 +59,40 @@ describe('session status line', () => {
     expect(renderSessionStatusLabel(initial, statusBar({ labels: 'full' }), createTheme(false), 80)).toContain('Context 0% · 0/1M')
   })
 
+  it('renders context pressure as percentage and used/window tokens', () => {
+    const withContext: TuiSessionStats = {
+      ...stats,
+      contextTokens: 12_200,
+      contextWindow: 100_000,
+    }
+    expect(sessionStatusGroups(withContext, statusBar())).toContain(
+      'Ctx 12% · 12.2K/100K',
+    )
+  })
+
+  it('raises context pressure text from warning to error colors', () => {
+    const colorTheme = createTheme(true, true)
+    const base: TuiSessionStats = {
+      ...stats,
+      contextWindow: 100,
+      contextTokens: 80,
+    }
+    const warning = renderStatusFooter({
+      model: 'm',
+      stats: base,
+      config: statusBar({ groups: ['context'] }),
+      width: 80,
+    }, colorTheme)
+    const error = renderStatusFooter({
+      model: 'm',
+      stats: { ...base, contextTokens: 95 },
+      config: statusBar({ groups: ['context'] }),
+      width: 80,
+    }, colorTheme)
+    expect(warning[1]).toContain(colorTheme.getFgAnsi('warning'))
+    expect(error[1]).toContain(colorTheme.getFgAnsi('error'))
+  })
+
   it('formats concise English metric groups', () => {
     expect(sessionStatusGroups(stats)).toEqual([
       'Cache 99%',
@@ -162,7 +196,6 @@ describe('session status line', () => {
       reasoningEffort: 'max',
       controls: {
         agentPreset: 'code',
-        tools: 'both',
         plan: { active: true, pending: false },
         permission: 'workspace-write',
       },
@@ -172,7 +205,7 @@ describe('session status line', () => {
       config: statusBar(),
       width: 140,
     }, createTheme(false))
-    expect(active[0]).toContain('deepseek-v4-pro · max · ptc · plan · both')
+    expect(active[0]).toContain('deepseek-v4-pro · max · ptc · plan')
     expect(active[0]).toContain('~/Workspace/dsh-tui · main')
     expect(active[0]).not.toContain('Workspace write')
 
@@ -194,7 +227,6 @@ describe('session status line', () => {
       model: 'm',
       controls: {
         agentPreset: 'minimal',
-        tools: 'native',
         plan: { active: false, pending: false },
       },
       config: statusBar(),
@@ -203,18 +235,6 @@ describe('session status line', () => {
     expect(idle[0]).toContain('m · minimal')
     expect(idle[0]).not.toContain('default')
     expect(idle[0]).not.toContain('native')
-
-    const codeTools = renderStatusFooter({
-      model: 'm',
-      controls: {
-        agentPreset: 'code',
-        tools: 'code',
-        plan: { active: false, pending: false },
-      },
-      config: statusBar(),
-      width: 48,
-    }, createTheme(false))
-    expect(codeTools[0]).toContain('m · ptc · code')
   })
 
   it('shows process-local loop state beside the model controls', () => {
