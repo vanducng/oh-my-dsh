@@ -59,7 +59,7 @@ Boot applies patches in this order:
 5. Existing MCP insert patches from user and project `mcp.json` files.
 6. This fork's `$OMDSH_HOME/omdsh/plugins.yml` include, then `$OMDSH_HOME/omdsh/cordis.patch.yml`.
 
-A later layer wins per row id. An id-targeted patch replaces the whole `config` object; it does not deep-merge. A patch that names a missing id is a stderr warning, not a silent no-op.
+A later layer wins per row id. An id-targeted patch replaces the whole `config` object; it does not deep-merge. A patch that names a missing id is skipped silently at boot (the loader logger is not wired to stderr in the TUI host), not an error.
 
 Module resolution stays two-anchored, using the published `dsh-app-boot` helpers. `@deepseek-ai/*` and `@vanducng/dsh-tui` resolve from the omdsh installation first through `healProfilesModuleFallback`. User bundles resolve from the Profile `node_modules`. A patch that inserts a package Node cannot resolve fails loud at boot.
 

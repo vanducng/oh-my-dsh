@@ -4,7 +4,7 @@
  * transcript state and rendered frame — what a terminal shows.
  */
 import { describe, expect, it } from 'vitest'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { applyEvent, blockLines, initialTranscript, renderInspectBanner, renderQueuedSubmissions, renderSubagents, renderTodos, renderView, replayEvents, settleIdleTranscript, TOOL_COLLAPSED_LINES, windowTranscript } from './event-views.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createTheme, SPINNER, SYMBOL } from '../chrome/theme.ts'
@@ -34,6 +34,21 @@ const composerRows = (lines: readonly string[], start: number): number => {
 }
 
 describe('applyEvent', () => {
+  it('skips relay frames for both the legacy and the new agent-message source kinds', () => {
+    for (const kind of ['subagent-report', 'agent-message'] as const) {
+      const state = applyEvent(
+        initialTranscript(),
+        ev('user/message', {
+          source: { kind, form: 'relay', senderSessionId: 'session-child-1' },
+          content: [{ type: 'text', text: 'background report from a subagent' }],
+          role: 'user',
+          id: 'message-1',
+        }, 1),
+      )
+      expect(state.blocks, kind).toEqual([])
+    }
+  })
+
   it('replays a complete log with the same state as immutable live folding', () => {
     const events = [
       ev('turn/start', { turn: 1 }, 1),
@@ -648,7 +663,7 @@ describe('applyEvent', () => {
   it('keeps terminal input above a labeled output section after settlement', () => {
     const lines = blockLines({
       kind: 'tool',
-      callId: CallId('call-terminal'),
+      callId: ToolCallId('call-terminal'),
       name: 'bash',
       args: '{"command":"ignored fallback"}',
       status: 'ok',
@@ -671,7 +686,7 @@ describe('applyEvent', () => {
     const output = Array.from({ length: TOOL_COLLAPSED_LINES + 3 }, (_, index) => `line-${index}`)
     const lines = blockLines({
       kind: 'tool',
-      callId: CallId('call-terminal-tail'),
+      callId: ToolCallId('call-terminal-tail'),
       name: 'bash',
       args: '{}',
       status: 'ok',
@@ -696,7 +711,7 @@ describe('applyEvent', () => {
     }
     const lines = blockLines({
       kind: 'tool',
-      callId: CallId('call-edit'),
+      callId: ToolCallId('call-edit'),
       name: 'edit',
       args: '{}',
       status: 'ok',
@@ -720,7 +735,7 @@ describe('applyEvent', () => {
   it('keeps a generic error result visible when the call was a diff', () => {
     const lines = blockLines({
       kind: 'tool',
-      callId: CallId('call-edit-error'),
+      callId: ToolCallId('call-edit-error'),
       name: 'edit',
       args: '{}',
       status: 'error',
@@ -894,7 +909,7 @@ describe('blockLines', () => {
     const command = 'pnpm --filter @vanducng/dsh-tui test 2>&1 | grep -v WARN | tail -6 && pnpm --filter @vanducng/dsh-tui build'
     const lines = blockLines({
       kind: 'tool',
-      callId: CallId('call-long'),
+      callId: ToolCallId('call-long'),
       name: 'bash',
       args: JSON.stringify({ command }),
       status: 'ok',
@@ -1071,7 +1086,7 @@ describe('renderView', () => {
       status: 'running' as const,
       blocks: [
         settled,
-        { kind: 'tool' as const, callId: CallId('call-running'), name: 'bash', args: '{}', status: 'running' as const, output: '' },
+        { kind: 'tool' as const, callId: ToolCallId('call-running'), name: 'bash', args: '{}', status: 'running' as const, output: '' },
       ],
     }
     const options = {

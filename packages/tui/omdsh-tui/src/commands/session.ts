@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type {} from '@deepseek-ai/dsh-tool-todo'
 import type {} from '../runtime/session-runtime.ts'
 import { registerCommands } from './registration.ts'
 import { formatRelativeAge } from '../chrome/relative-time.ts'
@@ -145,8 +146,9 @@ function showSession(ctx: Context, invocation: CommandInvocation): CommandResult
 
 async function retry(ctx: Context, invocation: CommandInvocation): Promise<CommandResult> {
   if (invocation.rawInput.trim() !== '') return { kind: 'error', text: 'Usage: /retry' }
-  for (let i = invocation.agent.session.events.length - 1; i >= 0; i -= 1) {
-    const text = humanText(invocation.agent.session.events[i] as SessionEvent)
+  const log = invocation.agent.session.snapshotEvents()
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const text = humanText(log[i] as SessionEvent)
     if (text === undefined) continue
     await ctx.omdshSession.send(text, invocation.agent)
     return { kind: 'success', text: 'Re-running the most recent human prompt as a new turn.' }
@@ -164,7 +166,7 @@ function showContext(ctx: Context, invocation: CommandInvocation): CommandResult
 
 function showTodo(invocation: CommandInvocation): CommandResult {
   if (invocation.rawInput.trim() !== '') return { kind: 'error', text: 'Usage: /todo' }
-  const event = invocation.agent.session.events.findLast(item => item.type === 'todo/write')
+  const event = invocation.agent.session.snapshotEvents().findLast(item => item.type === 'todo/write')
   if (event === undefined) return { kind: 'success', text: 'No todo list has been recorded.' }
   return {
     kind: 'success',
