@@ -39,10 +39,10 @@ if (invocation.completions !== undefined) {
     process.exitCode = 1
   }
 } else if (invocation.dumpConfig) {
-  const { dumpErrorMessage, dumpOmdshConfig, prepareLaunchEnvironment, writeAll } = await import('./composition.ts')
+  const { dumpErrorMessage, dumpHealedOmdshConfig, prepareLaunchEnvironment, writeAll } = await import('./composition.ts')
   try {
     prepareLaunchEnvironment()
-    await writeAll(process.stdout, dumpOmdshConfig() + '\n')
+    await writeAll(process.stdout, await dumpHealedOmdshConfig() + '\n')
   } catch (error) {
     process.stderr.write(dumpErrorMessage(error) + '\n')
     process.exitCode = 1

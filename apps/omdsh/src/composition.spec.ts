@@ -291,6 +291,18 @@ describe('boot patch assembly', () => {
     expect(result.stderr).toMatch(/^omdsh: /u)
     expect(result.stderr).not.toContain('at dumpOmdshConfig')
   })
+
+  it('resolves the product bundle from the built binary without pnpm exec', () => {
+    const home = temp('omdsh-dump-built-')
+    const result = spawnSync(process.execPath, [join(appRoot, 'lib/bin.js'), '--dump-config'], {
+      cwd: fileURLToPath(new URL('../../..', import.meta.url)),
+      encoding: 'utf8',
+      env: { ...process.env, OMDSH_HOME: home },
+      timeout: 30_000,
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain(PRODUCT_BUNDLE)
+  })
 })
 
 describe('dsh spine expansion', () => {

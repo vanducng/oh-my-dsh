@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   composeEntries,
+  healProfilesModuleFallback,
   initProfile,
   loadOptionalPatches,
   loadProfile,
@@ -77,8 +78,8 @@ export function ensureOmdshProfile(home: string): string {
 
 /**
  * Ensure the Profile exists, load its bundles, and rewrite the empty root
- * include. Module fallback healing happens asynchronously in runOmdsh after
- * this function returns the resolved Profile.
+ * include. Shared-fallback healing runs in {@link composeHealedLaunch} before
+ * this function so a bare `node lib/bin.js` can resolve the product bundle.
  */
 export function prepareProfile(home: string, userLayer = true): Profile {
   ensureOmdshProfile(home)
@@ -110,6 +111,28 @@ export function agentPresetsOverlay(layerPatches: readonly PatchOptions[][]): Pa
       roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
     },
   }
+}
+
+/**
+ * Heal the shared installation fallback, compose launch layers, then heal
+ * profile-local plugin links. The product bundle is this package, so a
+ * bare `node lib/bin.js` cannot resolve `@vanducng/oh-my-dsh` from
+ * `node_modules` until `$OMDSH_HOME/profiles/node_modules` exists.
+ */
+export async function composeHealedLaunch(
+  cwd: string = process.cwd(),
+  environment: NodeJS.ProcessEnv = process.env,
+  options: { userLayer?: boolean } = {},
+): Promise<LaunchComposition> {
+  const home = omdshHome(environment)
+  await healProfilesModuleFallback({ installAnchor: INSTALL_ANCHOR, home })
+  const composed = composeLaunch(cwd, environment, options)
+  await healProfilesModuleFallback({
+    installAnchor: INSTALL_ANCHOR,
+    profile: composed.profile,
+    home,
+  })
+  return composed
 }
 
 /**
