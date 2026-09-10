@@ -2563,7 +2563,7 @@ export class LocalTui implements TuiService {
           formatHelpText(this.#commands()),
           '',
           full
-            ? `**Keyboard Shortcuts · ${hotkeyCount(this.#keybindings)} bindings**`
+            ? `**Keyboard Shortcuts · ${hotkeyCount(this.#keybindings)} shortcuts**`
             : '**Essential Shortcuts**',
           '',
           full
