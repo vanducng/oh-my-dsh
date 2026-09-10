@@ -127,6 +127,13 @@ export interface TranscriptState {
   nextTurnInbox: UserMessage[]
   /** Durable steering/context waiting for a later step (kept for splice fidelity). */
   nextStepInbox: UserMessage[]
+  /**
+   * Text of the turn that ended in failure, held until the next submission.
+   * The transcript keeps its own error notice, but that row scrolls away while
+   * the composer stays fixed, so a failed turn would otherwise leave an
+   * apparently idle screen behind.
+   */
+  turnError: string | undefined
 }
 
 /** Empty starting state. */
@@ -140,6 +147,7 @@ export function initialTranscript(): TranscriptState {
     compaction: undefined,
     nextTurnInbox: [],
     nextStepInbox: [],
+    turnError: undefined,
   }
 }
 
@@ -445,6 +453,7 @@ function foldEvent(
       const reason = event.data.reason
       const hasPending = state.blocks.some(isBlockPending)
       const blocks = editableBlocks(state, mutable)
+      let failure: string | undefined
       if (reason.kind === 'error') hideFailedAttempt(blocks, event.data.turn, undefined, indexes)
       const droppedPartialTool = dropPartialToolPreviews(blocks, indexes)
       settleUnfinishedToolCalls(blocks)
@@ -457,7 +466,8 @@ function foldEvent(
         }
       }
       if (reason.kind === 'error') {
-        blocks.push({ kind: 'notice', level: 'error', text: 'error: ' + reason.error.code + ': ' + reason.error.message })
+        failure = 'error: ' + reason.error.code + ': ' + reason.error.message
+        blocks.push({ kind: 'notice', level: 'error', text: failure })
       } else if (reason.kind === 'max-tokens') {
         blocks.push({
           kind: 'notice',
@@ -479,7 +489,14 @@ function foldEvent(
       }
       // A compaction still open here cannot be the turn's own: clear it so a
       // late `compaction/end` cannot restore a stale running status.
-      return { ...state, blocks, status: 'idle', compactCommandId: undefined, compaction: undefined }
+      return {
+        ...state,
+        blocks,
+        status: 'idle',
+        compactCommandId: undefined,
+        compaction: undefined,
+        turnError: failure,
+      }
     }
     case 'user/message': {
       // Synthetic plugin injections (system-prompt runtime context, skill
@@ -490,7 +507,8 @@ function foldEvent(
       if (text === '') return state
       const blocks = editableBlocks(state, mutable)
       blocks.push({ kind: 'user', text })
-      return { ...state, blocks }
+      // A new submission is the acknowledgement that clears the fixed failure row.
+      return { ...state, blocks, turnError: undefined }
     }
     case 'assistant/attempt': {
       // A settled model attempt with no surface message (failed, retried,
@@ -866,6 +884,7 @@ function toolBlockLines(
     output: block.output,
     status: block.status,
     expanded,
+    ...(block.partial === true ? { partial: true } : {}),
     ...(block.presentation === undefined ? {} : { presentation: block.presentation }),
   })
   const diffs = exclusiveDiffs(block.presentation)
@@ -1460,6 +1479,28 @@ function queuedMessageLabel(message: UserMessage): string {
   return count === 0 ? '(empty message)' : `${count} image${count === 1 ? '' : 's'}`
 }
 
+/**
+ * One fixed row above the composer for a turn that ended in failure.
+ *
+ * The transcript keeps its own error notice, but transcript rows scroll into
+ * native history while the composer stays put: without this row a turn that
+ * failed while the user was reading elsewhere leaves an apparently idle screen.
+ * The row is bounded to a single line so it cannot squeeze the transcript.
+ */
+export function renderTurnError(text: string, theme: Theme, width: number): string[] {
+  if (text === '' || width <= 0) return []
+  const prefix = SYMBOL.error + ' '
+  const hint = ' · Alt+R retry'
+  // Drop the retry hint before the message itself when the terminal is narrow.
+  const suffix = width - 2 - visibleWidth(prefix) - visibleWidth(hint) >= 8 ? hint : ''
+  const budget = Math.max(1, width - 2 - visibleWidth(prefix) - visibleWidth(suffix))
+  const line = ' '
+    + theme.fg('error', prefix)
+    + theme.fg('error', truncateToWidth(text, budget))
+    + (suffix === '' ? '' : theme.fg('dim', suffix))
+  return [padToWidth(line, width)]
+}
+
 /** Compact, unframed pending-message view placed immediately above the composer. */
 export function renderQueuedSubmissions(
   submissions: readonly TuiSubmission[],
@@ -1673,6 +1714,11 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   const queuedSubmissions = editor === undefined || options.inspected !== undefined
     ? []
     : renderQueuedSubmissions(options.queuedSubmissions ?? [], theme, width, state.nextTurnInbox)
+  // Above the composer and below the queue: the failure explains why the queue
+  // is not moving, and the row survives until the next submission.
+  const turnError = editor === undefined || options.inspected !== undefined || state.turnError === undefined
+    ? []
+    : renderTurnError(state.turnError, theme, width)
   const todos = editor === undefined || options.inspected !== undefined ? [] : renderTodos(state.todos, theme, width)
   const goal = editor === undefined || options.inspected !== undefined || options.sessionControls?.goal === undefined
     ? []
@@ -1688,7 +1734,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   const inputLines = promptSelector?.lines ?? settings?.lines ?? copySelector?.lines ?? search?.lines
     ?? (editor === undefined ? [] : editor.lines)
   const spacer = 1
-  const reserved = inputLines.length + working.length + inspect.length + subagents.length + todos.length + goal.length + queuedSubmissions.length + spacer + autocomplete.length + statusFooter.length
+  const reserved = inputLines.length + working.length + inspect.length + subagents.length + todos.length + goal.length + queuedSubmissions.length + turnError.length + spacer + autocomplete.length + statusFooter.length
   const budget = Math.max(0, height - reserved)
   const focusStart = options.focusBlock === undefined
     ? undefined
@@ -1705,7 +1751,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
 
   const lines: string[] = [...visible]
   if (visible.length > 0) lines.push('')
-  const bottomRows = working.length + goal.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + inputLines.length + autocomplete.length + statusFooter.length
+  const bottomRows = working.length + goal.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + turnError.length + inputLines.length + autocomplete.length + statusFooter.length
   const livePinned = state.blocks.some(block => block.kind === 'tool' && block.status === 'running')
     || bottomRows > height
   const fill = Math.max(0, height - lines.length - bottomRows)
@@ -1716,6 +1762,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   lines.push(...subagents)
   lines.push(...todos)
   lines.push(...queuedSubmissions)
+  lines.push(...turnError)
   const editorStart = lines.length
   lines.push(...inputLines)
   lines.push(...autocomplete)
