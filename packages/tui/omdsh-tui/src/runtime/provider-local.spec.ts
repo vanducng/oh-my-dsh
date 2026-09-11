@@ -168,13 +168,14 @@ describe('LocalTui (tty)', () => {
       }, 2),
     ])
 
-    expect(term.captured).not.toContain('\x1b[3J')
+    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(2)
     const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
+    expect(screen).toContain('resumed prompt')
+    expect(screen).toContain('restored-0')
+    expect(screen).toContain('restored-15')
     expect(screen).toContain('restored-29')
-    expect(term.captured).toContain('Into the Unknown')
-    expect(term.captured).not.toContain('\x1b[?1049h')
+    expect(screen).toContain('Into the Unknown')
     tui.dispose()
-    expect(term.captured).toContain('restored-29')
   })
 
   it('defers the production first frame until the initial session is available', () => {
@@ -194,7 +195,7 @@ describe('LocalTui (tty)', () => {
     ], undefined, 'idle')
     expect(term.captured).toContain('Into the Unknown')
     expect(term.captured).toContain('initial session')
-    expect(term.captured).not.toContain('\x1b[3J')
+    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(1)
     tui.dispose()
   })
 
@@ -265,35 +266,37 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('keeps streaming assistant surfaces off main scrollback through resize and settlement', async () => {
+  it('keeps streaming assistant surfaces append-only through resize', () => {
     const term = new FakeTerminal()
     term.rows = 8
-    const tui = new LocalTui(term, 'm', false)
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 0 })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
+    })
     term.captured = ''
 
-    tui.event(ev('assistant/chunk', {
+    tui.streamDelta({
       turn: 1,
       step: 1,
-      chunk: { type: 'text-delta', index: 0, text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n') },
-    }, 1))
-    await new Promise<void>(resolve => { setTimeout(resolve, 50) })
-    expect(term.captured).toContain('\x1b[?1049h')
-    expect(term.captured).not.toContain('\x1b[?1049l')
+      chunk: {
+        type: 'text-delta',
+        index: 0,
+        text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n'),
+      },
+    })
+    expect(term.captured).toContain('draft-0')
+    expect(term.captured).not.toContain('\x1b[?1049h')
     expect(term.captured).not.toContain('\x1b[3J')
 
     const beforeResize = term.captured.length
     term.resize(term.columns, 5)
     const resizePaint = term.captured.slice(beforeResize)
-    expect(resizePaint).toContain('\x1b[?1049l')
-    expect(resizePaint).toContain('\x1b[?1049h')
-    tui.event(ev('assistant/message', {
-      turn: 1,
-      step: 1,
-      message: { content: [{ type: 'text', text: 'final assistant text' }] },
-    }, 2))
-    expect(term.captured).toContain('\x1b[?1049l')
-    expect(term.captured).toContain('final assistant text')
-    expect(term.captured).not.toContain('\x1b[3J')
+    expect(resizePaint).not.toContain('\x1b[3J')
+    expect(resizePaint).not.toContain('\x1b[?1049h')
     tui.dispose()
   })
 
@@ -810,17 +813,16 @@ describe('LocalTui (tty)', () => {
     })
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
     try {
-      tui.event(ev('assistant/chunk', {
+      tui.streamDelta({
         turn: 1,
         step: 1,
         chunk: { type: 'text-delta', index: 0, text: 'streaming' },
-      }, 1))
-      expect(term.captured).toContain('\x1b[?1049h')
+      })
+      expect(term.captured).toContain('streaming')
 
       press(term, '\x1a')
       expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTSTP')
       expect(term.raw).toBe(false)
-      expect(term.captured).toContain('\x1b[?1049l')
       expect(term.captured).toContain('\x1b[?2004l')
 
       term.output.write('SHELL-JOB\r\nSHELL-PROMPT\r\n')
@@ -828,7 +830,6 @@ describe('LocalTui (tty)', () => {
       process.emit('SIGCONT')
       await Promise.resolve()
       expect(term.raw).toBe(true)
-      expect(term.captured.match(/\x1b\[\?1049h/gu)?.length).toBeGreaterThan(1)
       expect(term.captured.slice(hostMark)).toContain('streaming')
       expect(term.captured.slice(hostMark)).not.toContain('\x1b[3J')
 
@@ -860,24 +861,19 @@ describe('LocalTui (tty)', () => {
       terminalProgress: false,
       expandTools: false,
     })
-    tui.event(ev('assistant/chunk', {
+    tui.streamDelta({
       turn: 1,
       step: 1,
       chunk: { type: 'text-delta', index: 0, text: 'streaming' },
-    }, 1))
-    expect(term.captured).toContain('\x1b[?1049h')
+    })
+    expect(term.captured).toContain('streaming')
 
     const mark = term.captured.length
     press(term, '\x07')
     const handoff = term.captured.slice(mark)
-    const editorEnter = handoff.indexOf('\x1b[?1049hEDITOR')
-    const editorExit = handoff.indexOf('\x1b[?1049l', editorEnter)
     expect(rawDuringEditor).toBe(false)
-    expect(handoff.indexOf('\x1b[?1049l')).toBeLessThan(editorEnter)
-    expect(editorEnter).toBeGreaterThanOrEqual(0)
-    expect(editorExit).toBeGreaterThan(editorEnter)
+    expect(handoff).toContain('\x1b[?1049hEDITOR')
     expect(handoff).toContain('EDITOR-MAIN')
-    expect(handoff.lastIndexOf('\x1b[?1049h')).toBeGreaterThan(handoff.indexOf('EDITOR-MAIN'))
     expect(handoff).toContain('\x1b[?2004l')
     expect(handoff).toContain('\x1b[?2004h')
     expect(handoff).not.toContain('\x1b[3J')

@@ -3,16 +3,19 @@
  *
  * The terminal owns native scrollback. This renderer owns only the current
  * screen and a logical boundary for rows already frozen above it. Routine
- * updates and explicit transcript epochs both preserve host history.
+ * updates treat native history as append-only. Explicit transcript epochs
+ * clear it once (ED3) when the terminal profile allows, then replay the
+ * replacement frame from a clean origin.
  *
  * Finalized rows cross the boundary by being painted at the top of the screen
- * immediately before a newline scrolls them into history. Mutable assistant
- * and tool surfaces use the alternate buffer until settlement, so terminal
- * resizes cannot freeze provisional rows into native history.
+ * immediately before a newline scrolls them into history. Running tool
+ * surfaces use the alternate buffer until settlement, so terminal resizes
+ * cannot freeze provisional rows into native history.
  *
  * reset() repairs the visible screen without replaying history. A logical
- * conversation replacement calls startEpoch() to append a new visual epoch
- * after clearing only the visible screen.
+ * conversation replacement must call startEpoch() so stale native history is
+ * cleared before the replacement transcript is replayed. Layout reflow uses
+ * startLayoutEpoch() so it does not erase host scrollback.
  *
  * The renderer never enables mouse tracking (1000/1006) and wraps every paint
  * in one DEC 2026 synchronized write.
@@ -28,6 +31,7 @@ const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
 const ENTER_ALT_SCREEN = '\x1b[?1049h'
 const EXIT_ALT_SCREEN = '\x1b[?1049l'
+const CLEAR_SCROLLBACK = '\x1b[3J'
 const CLEAR_SCREEN = '\x1b[2J\x1b[H'
 const CLEAR_LINE = '\x1b[2K'
 
@@ -42,6 +46,8 @@ export interface MainScreenRendererOptions {
   width?: number
   /** Wrap the paint in synchronized output (DEC 2026). */
   synchronized?: boolean
+  /** Whether explicit transcript replacement may erase native scrollback. */
+  clearScrollback?: boolean
   /** Borrow the alternate buffer for transient full-screen surfaces. */
   alternateScreenOverlays?: boolean
   /** Keep mutable assistant and tool surfaces out of native scrollback. */
@@ -53,6 +59,8 @@ export interface MainScreenRendererOptions {
 export interface EpochOptions {
   /** Full freezes the restored snapshot; pinned preserves its mutable suffix. */
   replay?: 'full' | 'pinned'
+  /** When false, layout reflow keeps native history. */
+  clearScrollback?: boolean
 }
 
 interface ResizeTransition {
@@ -75,6 +83,7 @@ interface ResizeBaseline {
 export class MainScreenRenderer {
   readonly #sink: RenderSink
   readonly #synchronized: boolean
+  readonly #canClearScrollback: boolean
   readonly #alternateScreenOverlays: boolean
   readonly #alternateScreenMutable: boolean
   readonly #preserveInitialScreen: boolean
@@ -85,6 +94,7 @@ export class MainScreenRenderer {
   #reanchor = false
   #newEpoch = false
   #fullReplayOnNextEpoch = true
+  #clearScrollbackOnNextRender = false
   #adoptPhysicalAfterTransient = false
   /** First logical row not frozen above the screen in the current epoch. */
   #physical = 0
@@ -109,6 +119,7 @@ export class MainScreenRenderer {
     this.#screen = this.#blankScreen()
     this.#altScreen = this.#blankScreen()
     this.#synchronized = options.synchronized === true
+    this.#canClearScrollback = options.clearScrollback !== false
     this.#alternateScreenOverlays = options.alternateScreenOverlays === true
     this.#alternateScreenMutable = options.alternateScreenMutable === true
     this.#preserveInitialScreen = options.preserveInitialScreen === true
@@ -154,17 +165,18 @@ export class MainScreenRenderer {
     this.#cursorVisible = true
   }
 
-  /** Append a new logical transcript epoch on the next paint. */
+  /** Replace native history with a new logical transcript on the next paint. */
   startEpoch(options: EpochOptions = {}): void {
     this.#newEpoch = true
     this.#fullReplayOnNextEpoch = options.replay !== 'pinned'
+    this.#clearScrollbackOnNextRender = options.clearScrollback !== false
     this.#reanchor = true
     this.#adoptPhysicalAfterTransient = false
   }
 
   /** Start a fresh row-index space after presentation changes reflow finalized rows. */
   startLayoutEpoch(): void {
-    this.startEpoch()
+    this.startEpoch({ clearScrollback: false })
   }
 
   /** Put the cursor on a fresh line before terminal ownership is released. */
@@ -585,10 +597,18 @@ export class MainScreenRenderer {
     return Array.from({ length: this.#height }, () => '')
   }
 
+  #takeScrollbackClear(): string {
+    const clear = this.#clearScrollbackOnNextRender && this.#canClearScrollback
+    this.#clearScrollbackOnNextRender = false
+    return clear ? CLEAR_SCROLLBACK : ''
+  }
+
   #wrap(payload: string): string {
-    if (payload === '') return ''
+    const prefix = this.#takeScrollbackClear()
+    if (payload === '' && prefix === '') return ''
+    const body = prefix + payload
     return this.#synchronized
-      ? SYNC_OUTPUT_BEGIN + DISABLE_AUTOWRAP + payload + ENABLE_AUTOWRAP + SYNC_OUTPUT_END
-      : DISABLE_AUTOWRAP + payload + ENABLE_AUTOWRAP
+      ? SYNC_OUTPUT_BEGIN + DISABLE_AUTOWRAP + body + ENABLE_AUTOWRAP + SYNC_OUTPUT_END
+      : DISABLE_AUTOWRAP + body + ENABLE_AUTOWRAP
   }
 }
