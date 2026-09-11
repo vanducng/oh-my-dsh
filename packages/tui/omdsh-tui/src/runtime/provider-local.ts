@@ -353,6 +353,7 @@ export class LocalTui implements TuiService {
   #sessionId: string | undefined
   #sessionTitle: string | undefined
   #writtenWindowTitle: string | undefined
+  #pendingWindowTitle: string | undefined
   #sessionStats: TuiSessionStats | undefined
   #sessionControls: TuiSessionControls | undefined
   #loopStatus: TuiLoopStatus | undefined
@@ -455,11 +456,16 @@ export class LocalTui implements TuiService {
     this.#pwd = shortenPath(project.root)
     this.#branch = project.gitLabel
     this.#renderer = new MainScreenRenderer(
-      { write: (chunk) => { this.#term.output.write(chunk) } },
+      { write: (chunk) => {
+        const prefix = this.#pendingWindowTitle
+        this.#pendingWindowTitle = undefined
+        this.#term.output.write(prefix === undefined ? chunk : prefix + chunk)
+      } },
       {
         width: this.#term.width(),
         height: this.#term.height(),
         synchronized: this.#tty,
+        clearScrollback: this.#terminalProfile === 'direct',
         alternateScreenOverlays: paths.alternateScreenOverlays === true,
         alternateScreenMutable: true,
         preserveInitialScreen: paths.preserveInitialScreen === true,
@@ -744,10 +750,17 @@ export class LocalTui implements TuiService {
    * sequence, and the payload is bounded to keep tab strips readable.
    */
   #syncWindowTitle(): void {
+    if (this.#deferInitialRender) return
     const title = windowTitleText(this.#sessionTitle)
     if (title === this.#writtenWindowTitle) return
     this.#writtenWindowTitle = title
-    this.#term.output.write(`\x1b]2;${title}\x07`)
+    this.#pendingWindowTitle = `\x1b]2;${title}\x07`
+  }
+
+  #flushPendingWindowTitle(): void {
+    if (this.#pendingWindowTitle === undefined) return
+    this.#term.output.write(this.#pendingWindowTitle)
+    this.#pendingWindowTitle = undefined
   }
 
   /** Apply prefs loaded from the settings document (does not persist). */
@@ -1239,11 +1252,13 @@ export class LocalTui implements TuiService {
       this.#streamRenderTimer = null
     }
     if (this.#deferInitialRender) return
+    this.#syncWindowTitle()
     const frame = this.#tty ? this.#viewFrame() : { lines: [] }
     this.#focusBlock = undefined
     this.#promptDocument = frame.promptDocument
     this.#syncScroll(frame.transcript)
     this.#renderer.render(frame)
+    this.#flushPendingWindowTitle()
   }
 
   #scheduleStreamRender(): void {
@@ -2805,7 +2820,6 @@ export function apply(ctx: Context, config: Config): void {
       deferInitialRender: true,
       terminalProfile,
       alternateScreenOverlays: terminalProfile === 'direct',
-      preserveInitialScreen: true,
       historyPath: config.historyPath ?? join(dshHome, 'omdsh', 'history.jsonl'),
       keybindingsPath: config.keybindingsPath ?? join(dshHome, 'omdsh', 'keybindings.json'),
     },

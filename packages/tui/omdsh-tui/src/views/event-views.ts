@@ -1705,6 +1705,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   if (visible.length > 0) lines.push('')
   const bottomRows = working.length + goal.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + inputLines.length + autocomplete.length + statusFooter.length
   const livePinned = state.blocks.some(block => block.kind === 'tool' && block.status === 'running')
+    || bottomRows > height
   const fill = Math.max(0, height - lines.length - bottomRows)
   lines.push(...Array.from({ length: fill }, () => ''))
   lines.push(...working)

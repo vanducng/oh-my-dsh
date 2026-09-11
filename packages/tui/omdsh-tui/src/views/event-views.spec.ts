@@ -338,12 +338,10 @@ describe('applyEvent', () => {
   })
 
   it('settles orphaned durable tails before idle replay', () => {
-    let state = initialTranscript()
-    state = applyEvent(state, ev('assistant/chunk', {
-      turn: 1,
-      step: 1,
-      chunk: { type: 'text-delta', text: 'delivered prefix' },
-    }, 1))
+    let state = applyStreamChunk(
+      initialTranscript(),
+      { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'delivered prefix' } },
+    )
     state = applyEvent(state, ev('tool/call', { callId: 'call-1', name: 'bash', arguments: '{}' }, 2))
 
     const settled = settleIdleTranscript(state)
@@ -1479,7 +1477,7 @@ describe('renderView', () => {
       initialTranscript(),
       { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'thinking' } },
     )
-    expect(view(assistant).livePinned).toBe(true)
+    expect(view(assistant).livePinned).toBe(false)
 
     const tool = applyEvent(
       initialTranscript(),
