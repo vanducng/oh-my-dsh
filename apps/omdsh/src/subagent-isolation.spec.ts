@@ -132,8 +132,10 @@ describe('process-isolated subagent transport', () => {
     // Resolve the expression the loader will evaluate, against a parent home
     // that deliberately sits inside this run's temp root.
     const home = temp('omdsh-subagent-resolve-')
-    const resolved = evalExpr(env.DSH_HOME, { OMDSH_HOME: home, HOME: '/home/example' })
-    expect(resolved).toBe(join(home, 'acp-child'))
+    const resolved = String(evalExpr(env.DSH_HOME, { OMDSH_HOME: home, HOME: '/home/example' }))
+    // The composition joins with `/` (same as sessions/storages). Node accepts
+    // that mix on Windows; do not require path.join's native separator.
+    expect(resolved.replaceAll('\\', '/')).toBe(`${home.replaceAll('\\', '/')}/acp-child`)
     // Never the parent home itself: that would defeat the isolation.
     expect(resolved).not.toBe(home)
   })
