@@ -44,13 +44,14 @@
   - id: session-stats
     name: '@deepseek-ai/dsh-session-stats'
 
-  # Exact session reads for @session mentions. openAt: never keeps FTS closed so
-  # Node 22 never loads experimental node:sqlite; list/read still work over JSONL.
+  # Exact session reads for @session mentions, plus lazy full-text search.
+  # openAt: first-search keeps startup free of experimental node:sqlite; the
+  # index opens only when a human actually searches the session library.
   - id: session-query
     name: '@deepseek-ai/dsh-session-query-sqlite'
     config:
       path: ':memory:'
-      openAt: never
+      openAt: first-search
 
   - id: session-reference
     name: '@deepseek-ai/dsh-session-reference'
@@ -65,6 +66,7 @@
     name: '@deepseek-ai/dsh-attachment-local'
     config:
       dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
+
 
   # Plugin-facing storage facility, mounted at the harness release omdsh pins
   # so out-of-tree plugins share one instance instead of installing their own.
@@ -118,7 +120,7 @@
     name: '@deepseek-ai/dsh-agent-default-model'
     config:
       provider: !!js process.env.OMDSH_PROVIDER || 'deepseek-official'
-      model: !!js process.env.OMDSH_MODEL || 'deepseek-v4-flash'
+      model: !!js process.env.OMDSH_MODEL || 'deepseek-flash'
 
   - id: agent-presets
     name: '@deepseek-ai/dsh-agent-presets'
@@ -152,7 +154,7 @@
       workspaceRoot: !!js process.cwd()
 
   - id: fs
-    name: '@deepseek-ai/dsh-fs-local'
+    name: '@deepseek-ai/dsh-fs-sandbox'
 
   - id: fs-observation-policy
     name: '@deepseek-ai/dsh-fs-observation-policy'
@@ -160,8 +162,23 @@
   - id: subprocess
     name: '@deepseek-ai/dsh-subprocess-local'
 
+  # Exactly one shell stack mounts per host: the bash stack gates off Windows
+  # and its PowerShell twin gates off everything else, so a session always has
+  # one confined shell and never a tool whose interpreter is missing. Timeouts
+  # are pinned rather than inherited: upstream's 60s base default is short for
+  # ordinary builds and test suites, and the model can still raise the limit
+  # per call or run the command in the background.
   - id: bash
     name: '@deepseek-ai/dsh-bash-sandbox'
+    disabled: !!js process.platform === 'win32'
+    config:
+      timeoutMs: 120000
+
+  - id: pwsh
+    name: '@deepseek-ai/dsh-pwsh-sandbox'
+    disabled: !!js process.platform !== 'win32'
+    config:
+      timeoutMs: 120000
 
   - id: permission
     name: '@deepseek-ai/dsh-permission-presets'
@@ -239,6 +256,11 @@
 
   - id: tool-bash
     name: '@deepseek-ai/dsh-tool-bash'
+    disabled: !!js process.platform === 'win32'
+
+  - id: tool-pwsh
+    name: '@deepseek-ai/dsh-tool-pwsh'
+    disabled: !!js process.platform !== 'win32'
 
   - id: agent-instructions
     name: '@deepseek-ai/dsh-agent-instructions'
@@ -250,6 +272,18 @@
 
   - id: tool-jobs
     name: '@deepseek-ai/dsh-tool-jobs'
+
+  # Persistent, owner-scoped terminal sessions for interactive stdin and
+  # cross-call state (REPLs, debuggers, a shell to return to). The one-shot
+  # bash/pwsh tools remain the default for bounded commands.
+  - id: terminal
+    name: '@deepseek-ai/dsh-terminal'
+
+  - id: terminal-bash
+    name: '@deepseek-ai/dsh-terminal-bash'
+
+  - id: tool-terminal
+    name: '@deepseek-ai/dsh-tool-terminal'
 
   - id: agent-loop
     name: '@deepseek-ai/dsh-agent-loop'
@@ -304,14 +338,71 @@
     config:
       maxOutputChars: 16000
 
+  # Deliverables: the model declares the workspace files it finished so the
+  # user can find them afterwards. The files are not copied or preserved — the
+  # card lists their source paths, and the TUI renders that list instead of the
+  # raw call arguments.
+  - id: tool-present
+    name: '@deepseek-ai/dsh-tool-present'
+
+  # Anonymous public web fetch, no credential and no search provider: a fetch
+  # costs nothing and the TUI already renders web sources. Search stays off
+  # because DeepSeek's native search spends a whole model turn per query; a
+  # deployment that wants it mounts a provider in its own overlay and flips
+  # `search` on here.
+  - id: web
+    name: '@deepseek-ai/dsh-web'
+
+  - id: web-fetch-http
+    name: '@deepseek-ai/dsh-web-fetch-http'
+
+  - id: tool-web
+    name: '@deepseek-ai/dsh-tool-web'
+    config:
+      search: false
+      fetch: true
+
+  # Spills one oversized plain-text tool result to a private file and hands the
+  # model a bounded preview plus the path. The cap is deliberately far above
+  # upstream's 50 KB: the session log carries the replacement, so a lower cap
+  # would shorten what a human can expand in the transcript.
+  - id: spill-local
+    name: '@deepseek-ai/dsh-spill-local'
+
+  - id: spill-policy
+    name: '@deepseek-ai/dsh-spill-policy'
+    config:
+      maxInlineBytes: 200000
+
   - id: token-meter
     name: '@deepseek-ai/dsh-token-meter'
+
+  # Trims oversized tool results before condensation, so the model-visible
+  # result stays inside the budget; the full original stays in the session log.
+  # compaction-basic reads this through ctx.get, so the row must precede it.
+  - id: tool-result-pruner
+    name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+    config:
+      thresholdChars: 8192
+      headChars: 4096
+      tailChars: 1024
 
   - id: compaction
     name: '@deepseek-ai/dsh-compaction-basic'
 
   - id: command-compact
     name: '@deepseek-ai/dsh-command-compact'
+
+  # Guard rails on the tool chain: a cooperative per-tool deadline, and an
+  # advisory reminder when an agent repeats an identical call.
+  - id: timeout-policy
+    name: '@deepseek-ai/dsh-tool-call-timeout-policy'
+
+  - id: repeat-tool-reminder
+    name: '@deepseek-ai/dsh-repeat-tool-reminder'
+    config:
+      thresholds: [3, 5, 8]
+      argumentsPreviewChars: 500
 
   - id: subagent
     name: '@deepseek-ai/dsh-subagent'
@@ -320,6 +411,43 @@
     name: '@deepseek-ai/dsh-subagent-spawn-in-process'
     config:
       providerName: spawn
+
+  # Fork seeds the child with the parent's completed turns, so the inherited
+  # prefix stays eligible for KV cache reuse. Model selection is deliberately
+  # absent: a child that switched routes would pay for the inherited history
+  # again.
+  - id: subagent-fork
+    name: '@deepseek-ai/dsh-subagent-fork-in-process'
+    config:
+      providerName: fork
+
+  # Process-isolated transport. Every in-process backend above runs the child
+  # agent on the TUI's own event loop, so a heavy delegation starves rendering
+  # and the activity animation. This backend spawns a whole child runtime
+  # instead, moving that CPU off the TUI thread. It is an extra opt-in
+  # transport: `spawn`/`fork` stay mounted and keep their parent-shared
+  # features, which ACP cannot honour.
+  #
+  # ACP advertises no start-time capabilities and implements no continuable
+  # runs, so `providerName: acp` must not be selected by a tool that needs
+  # `agentOptions`, `persona`, `toolFilter`, a numeric `maxDepth`, or
+  # `backgroundMode: continuable`.
+  - id: subagent-acp
+    name: '@deepseek-ai/dsh-subagent-acp'
+    config:
+      providerName: acp
+      command: !!js process.env.OMDSH_ACP_COMMAND || 'dsh'
+      args: !!js (process.env.OMDSH_ACP_ARGS || '--profile acp').split(' ')
+      permission: allow
+      # The child boots its own profile, so it gets its own home. Leaving the
+      # parent's home visible would let the child read the parent's profiles
+      # and credentials, and a composition that also delegated by ACP would
+      # recurse.
+      env:
+        DSH_HOME: !!js (process.env.OMDSH_HOME || process.env.DSH_HOME || process.env.HOME + '/.dsh') + '/acp-child'
+        OMDSH_HOME: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
+        OMDSH_DEEPSEEK_API_KEY: !!js process.env.OMDSH_DEEPSEEK_API_KEY || undefined
+        DEEPSEEK_API_KEY: !!js process.env.DEEPSEEK_API_KEY || process.env.OMDSH_DEEPSEEK_API_KEY || undefined
 
   - id: subagent-control
     name: '@deepseek-ai/dsh-tool-subagent-control'
@@ -334,10 +462,68 @@
       toolName: subagent
       backgroundMode: continuable
 
+  - id: tool-subagent-fork
+    name: '@deepseek-ai/dsh-tool-subagent'
+    config:
+      provider: fork
+      toolName: subagent_fork
+      backgroundMode: continuable
+
+  # The isolated delegation tool. It is a second `dsh-tool-subagent` over the
+  # out-of-process backend, so a caller chooses isolation per delegation
+  # instead of trading the parent-shared features away globally.
+  #
+  # Three settings are forced by ACP's absent capabilities, not preferences:
+  #   - `maxDepth: provider-managed` — a numeric cap is refused because the
+  #     provider cannot enforce recursion depth across a process boundary, and
+  #     the child's own composition already bounds it.
+  #   - `backgroundMode: one-shot` — the published ACP provider implements no
+  #     `prepareContinuable`, so a continuable run is refused at mount.
+  #   - no `agentOptions`/`persona`/`toolFilter` — all three are refused.
+  # The consequence is user-visible: an isolated child cannot be steered or
+  # followed up after dispatch. Use `subagent` when that matters.
+  - id: tool-subagent-isolated
+    name: '@deepseek-ai/dsh-tool-subagent'
+    config:
+      provider: acp
+      toolName: subagent_isolated
+      backgroundMode: one-shot
+      maxDepth: provider-managed
+
+  # Workflow and Ralph, as the upstream base bundle mounts them.
+  #
+  # The worker-thread engine is the seam provider: `dsh-workflow-worker-thread`
+  # executes model-written orchestration scripts off the host event loop, which
+  # is the same isolation the ACP subagent transport buys for delegation.
+  # Mounting `dsh-workflow` as well would double-register `workflowEngine`, so
+  # it stays a dependency the engine resolves rather than a composition row.
+  - id: workflow-worker-thread
+    name: '@deepseek-ai/dsh-workflow-worker-thread'
+    config:
+      provider: spawn
+
+  # `toolName` is renamed because omdsh already owns a `/workflow` slash command
+  # that switches the Default/Plan workflow. The two live in different
+  # namespaces (tool vs command) and never collide at runtime, but a bare
+  # `workflow` entry in `/tools` would read as that command.
+  - id: tool-workflow
+    name: '@deepseek-ai/dsh-tool-workflow'
+    config:
+      toolName: workflow_run
+
+  # Ralph iterates fresh agents over a build-time-fixed script; it reuses the
+  # continuable in-process `spawn` provider, so it depends on that transport
+  # staying mounted.
+  - id: tool-ralph
+    name: '@deepseek-ai/dsh-tool-ralph'
+    config:
+      subagentProvider: spawn
+      maxRounds: 64
+
   - id: tui
     name: '@vanducng/dsh-tui'
     config:
-      model: !!js process.env.OMDSH_MODEL || 'deepseek-v4-flash'
+      model: !!js process.env.OMDSH_MODEL || 'deepseek-flash'
 
   - id: agent-behavior
     name: '@vanducng/oh-my-dsh/agent-behavior'
@@ -372,11 +558,17 @@
   - id: tui-command-export
     name: '@vanducng/dsh-tui/command-export'
 
+  - id: tui-command-diff
+    name: '@vanducng/dsh-tui/command-diff'
+
   - id: tui-command-trajectory
     name: '@vanducng/dsh-tui/command-trajectory'
 
   - id: tui-command-integrations
     name: '@vanducng/dsh-tui/command-integrations'
+
+  - id: tui-command-jobs
+    name: '@vanducng/dsh-tui/command-jobs'
 
   - id: tui-startup-notices
     name: '@vanducng/dsh-tui/startup-notices'

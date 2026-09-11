@@ -7,6 +7,8 @@ import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-ses
 import type {} from '@deepseek-ai/dsh-subagent'
 import { queueHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import { AttachmentError, AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { GoalId } from '@deepseek-ai/dsh-goal'
+import type { GoalProjection } from '@deepseek-ai/dsh-goal/types'
 import { mcpCatalogText } from '../commands/integrations.ts'
 import type { TuiService } from '../definition.ts'
 
@@ -16,7 +18,7 @@ vi.mock('@deepseek-ai/dsh-subagent/internal', () => ({
 import {
   conversationTurns,
   createSubmissionMessage,
-  encodeComposerImages,
+  encodeCommandAttachments,
   modelStatus,
   recentSessionContent,
   restoreSubmissionMessage,
@@ -73,6 +75,42 @@ describe('sessionControls', () => {
       plan: { active: true, pending: false },
       permission: 'workspace-write',
     })
+  })
+
+  it('reports the logged sandbox override ahead of the standing preset', () => {
+    const permissions = { currentValue: 'workspace-write', options: [] }
+    expect(sessionControls({ permissions })).toEqual({ permission: 'workspace-write' })
+    expect(sessionControls({ permissions, sandboxMode: 'danger-full-access' })).toEqual({ permission: 'danger-full-access' })
+    // null means no override was ever logged; the preset still describes the mode.
+    expect(sessionControls({ permissions, sandboxMode: null })).toEqual({ permission: 'workspace-write' })
+  })
+
+  it('projects the durable goal and hides a completed one', () => {
+    const projection: GoalProjection = {
+      goal: { id: GoalId('goal-1'), revision: 2, objective: 'Land batch 2', phase: 'active', maxGoalRounds: 12 },
+      roundsStarted: 3,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    }
+    expect(sessionControls({ goal: projection })).toEqual({
+      goal: { phase: 'active', objective: 'Land batch 2', roundsStarted: 3, maxGoalRounds: 12 },
+    })
+    const blocked: GoalProjection = {
+      ...projection,
+      goal: {
+        ...projection.goal,
+        phase: 'blocked',
+        blockedReason: { code: 'waiting', message: 'waiting on the API key' },
+      },
+    }
+    expect(sessionControls({ goal: blocked }).goal).toMatchObject({
+      phase: 'blocked',
+      blockedReason: 'waiting on the API key',
+    })
+    expect(sessionControls({ goal: null })).toEqual({})
+    expect(sessionControls({
+      goal: { ...projection, goal: { ...projection.goal, phase: 'complete' } },
+    })).toEqual({})
   })
 
   it('reads only client-visible snapshot values for footer inputs', () => {
@@ -199,7 +237,7 @@ describe('conversationTurns', () => {
       { type: 'session/start', data: {} },
       { type: 'turn/start', data: { turn: 1 } },
       { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'First question' }] } },
-      { type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [] } } },
+      { type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [] }, stream: [] } },
       { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
       { type: 'turn/start', data: { turn: 2 } },
       { type: 'user/message', data: { source: { kind: 'plugin' }, content: [{ type: 'text', text: 'Injected context' }] } },
@@ -229,8 +267,13 @@ describe('sessionStats', () => {
   it('folds boundaries and disjoint token usage', () => {
     const events = [
       { type: 'step/start', time: 10, data: { turn: 1, step: 1 } },
-      { type: 'assistant/chunk', time: 12, data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hi' } } },
-      { type: 'assistant/message', time: 20, data: { turn: 1, step: 1, usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 3 } } },
+      { type: 'assistant/message', time: 20, data: {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'text', text: 'hi' }] },
+        stream: [{ type: 'text-chunks', time0: 12, index: 0, dt: [], texts: ['hi'] }],
+        usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 3 },
+      } },
       { type: 'step/end', time: 25, data: { turn: 1, step: 1 } },
       { type: 'turn/end', time: 30, data: { turn: 1 } },
     ] as unknown as SessionEvent[]
@@ -297,14 +340,14 @@ describe('sessionStats', () => {
 })
 
 describe('shouldRefreshSessionInfoAfter', () => {
-  it('leaves streaming deltas to projection notifications and refreshes settled events', () => {
+  it('skips attempt settlements without usage and refreshes other settled events', () => {
     expect(shouldRefreshSessionInfoAfter({
-      type: 'assistant/chunk',
-      data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'thinking' } },
+      type: 'assistant/attempt',
+      data: { turn: 1, step: 1, stream: [] },
     } as SessionEvent)).toBe(false)
     expect(shouldRefreshSessionInfoAfter({
       type: 'assistant/message',
-      data: { turn: 1, step: 1, message: { content: [] } },
+      data: { turn: 1, step: 1, message: { content: [] }, stream: [] },
     } as SessionEvent)).toBe(true)
     expect(shouldRefreshSessionInfoAfter({
       type: 'turn/end',
@@ -381,11 +424,11 @@ describe('capability catalogs', () => {
   })
 })
 
-describe('encodeComposerImages', () => {
-  it('encodes composer drafts as canonical base64 attachments', () => {
+describe('encodeCommandAttachments', () => {
+  it('encodes composer drafts as canonical typed command attachments', () => {
     const data = new Uint8Array([1, 2, 3, 4])
-    expect(encodeComposerImages([{ data, mediaType: 'image/png', name: 'shot.png' }])).toEqual([
-      { data: Buffer.from(data).toString('base64'), mediaType: 'image/png', name: 'shot.png' },
+    expect(encodeCommandAttachments([{ data, mediaType: 'image/png', name: 'shot.png' }])).toEqual([
+      { type: 'image', data: Buffer.from(data).toString('base64'), mediaType: 'image/png', name: 'shot.png' },
     ])
   })
 })
@@ -445,15 +488,14 @@ describe('SessionRuntime inspected-subagent delivery', () => {
     agentCtx.provide('sessionProjections', { stateOf: () => 'standard' })
     agentCtx.provide('tools', { presentAs: () => () => undefined })
     agentCtx.provide('permissionPresets', { names: [], optionOf: () => undefined, current: () => undefined })
-    Object.defineProperty(agentCtx, 'agent', { value: rootAgent })
 
     const subagents = {
       listChildren: async () => [],
       sendMessage: vi.fn(async () => 'sent-1'),
     }
     ctx.provide('agents', {
-      create: async (options: { setup?: (context: typeof agentCtx) => Promise<void> }) => {
-        await options.setup?.(agentCtx)
+      create: async (options: { setup?: (context: typeof agentCtx, agent: Agent) => Promise<void> }) => {
+        await options.setup?.(agentCtx, rootAgent)
         return { agent: rootAgent, dispose: async () => undefined } as unknown as AgentHandle
       },
       get: () => undefined,
@@ -506,6 +548,85 @@ describe('SessionRuntime inspected-subagent delivery', () => {
       expect(subagents.sendMessage).not.toHaveBeenCalled()
       expect(restoreInput).not.toHaveBeenCalled()
       expect(notice).not.toHaveBeenCalled()
+    } finally {
+      await runtime.dispose()
+      await ctx.fiber.dispose()
+      await agentCtx.fiber.dispose()
+    }
+  })
+})
+
+describe('SessionRuntime subagent catalog restore', () => {
+  it('lists the children a resumed parent recorded in its own log', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const rootId = SessionId('session-catalog-root')
+    const rootSession = ctx.sessions.create(rootId)
+    // A resumed parent never loads its children, so this durable fact is the
+    // only thing that can still put them on the roster.
+    rootSession.append('subagent/catalog', {
+      version: 0,
+      childId: SessionId('session-catalog-child'),
+      childCreatedAt: 1,
+      mode: 'continuable',
+      label: 'Catalog child',
+    })
+
+    const agentCtx = new Context()
+    await agentCtx.plugin(CommandRuntime)
+    agentCtx.provide('agentPresets', {
+      defaultId: 'standard',
+      resolve: async () => ({ id: 'standard' }),
+      mount: async () => ({ id: 'standard' }),
+    })
+    agentCtx.provide('sessionProjections', { stateOf: () => 'standard' })
+    agentCtx.provide('tools', { presentAs: () => () => undefined })
+    agentCtx.provide('permissionPresets', { names: [], optionOf: () => undefined, current: () => undefined })
+
+    const rootAgent = {
+      id: rootId,
+      session: rootSession,
+      status: 'idle',
+      inbox: { nextTurn: [], nextStep: [] },
+    } as unknown as Agent
+    ctx.provide('agentPresets', {
+      defaultId: 'standard',
+      resolve: async () => ({ id: 'standard' }),
+      mount: async () => ({ id: 'standard' }),
+    })
+    ctx.provide('agents', {
+      create: async (options: { setup?: (context: typeof agentCtx, agent: Agent) => Promise<void> }) => {
+        await options.setup?.(agentCtx, rootAgent)
+        return { agent: rootAgent, dispose: async () => undefined } as unknown as AgentHandle
+      },
+      get: () => undefined,
+    })
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }),
+    })
+    ctx.provide('subagents', { listChildren: async () => [], sendMessage: vi.fn(async () => 'sent-1') })
+
+    const rosters: unknown[] = []
+    // Activation touches far more of the TuiService than one roster assertion
+    // needs; unknown members resolve to a no-op returning no-op.
+    const tui = new Proxy(
+      {
+        ...(stubTui() as unknown as Record<string, unknown>),
+        setSubagents: (roster: unknown) => { rosters.push(roster) },
+      },
+      {
+        get(target: Record<string, unknown>, prop: string) {
+          return prop in target ? target[prop] : () => () => {}
+        },
+      },
+    ) as unknown as TuiService
+
+    const runtime = new SessionRuntime(ctx, tui)
+    try {
+      await runtime.start()
+      expect(rosters.at(-1)).toMatchObject({
+        agents: [{ id: 'session-catalog-child', label: 'Catalog child', mode: 'continuable', phase: 'completed' }],
+      })
     } finally {
       await runtime.dispose()
       await ctx.fiber.dispose()

@@ -11,6 +11,7 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { StreamDelta } from './views/event-views.ts'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { TuiToolPresentation } from './chrome/tool-renderers.ts'
 
@@ -84,6 +85,23 @@ export interface TuiSessionControls {
   plan?: { active: boolean; pending: boolean }
   /** Effective permission preset, such as workspace-write or danger-full-access. */
   permission?: string
+  /** Current durable goal; absent before the first goal and after a clear or completion. */
+  goal?: TuiGoalStatus
+}
+
+/**
+ * One durable goal projected into the bar above the composer. A completed goal
+ * is reported as absent, matching the Harness projection's own visibility rule.
+ */
+export interface TuiGoalStatus {
+  phase: 'active' | 'paused' | 'blocked'
+  objective: string
+  /** Present exactly while `phase` is `blocked`. */
+  blockedReason?: string
+  /** Highest admitted goal round. */
+  roundsStarted: number
+  /** Admitted round cap; `0` means no cap was configured. */
+  maxGoalRounds: number
 }
 
 /** Process-local repeated-prompt state contributed by the Loop plugin. */
@@ -210,6 +228,8 @@ export interface TuiAgentBehaviorSettingsBinding {
 export interface TuiService {
   /** Render one session-log event (streamed as recorded). */
   event(event: SessionEvent, presentation?: TuiToolPresentation): void
+  /** Fold one live `agent/assistant-stream` chunk into the transcript. */
+  streamDelta(delta: StreamDelta): void
   /** Update the status line liveness. */
   setStatus(status: TuiStatus): void
   /** Update the model and effective reasoning effort shown in the composer. */
@@ -243,16 +263,19 @@ export interface TuiService {
   /** Update session identity, recent rows, projected controls, and aggregate figures. */
   setSession(info: {
     id: string
+    /** Folded title of the active session, when it has one. */
+    title?: string
     recent: readonly TuiRecentSession[]
     stats?: TuiSessionStats
     controls?: TuiSessionControls
   }): void
   /**
    * Read the next submitted composer value. Resolves null when the user quits
-   * (Ctrl-D on empty input, or stdin EOF in non-tty mode). One in-flight
-   * call at a time.
+   * (Ctrl-D on empty input, or stdin EOF in non-tty mode), on dispose, or when
+   * `signal` aborts (the runner unmount must not leak a pending read). One
+   * in-flight call at a time.
    */
-  readInput(): Promise<TuiSubmission | null>
+  readInput(signal?: AbortSignal): Promise<TuiSubmission | null>
   /** Restore an accepted draft when persistence or dispatch fails. */
   restoreInput(submission: TuiSubmission): void
   /** Resolve one queued-message back-navigation request into the composer. */

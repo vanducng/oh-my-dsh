@@ -23,7 +23,9 @@ import {
   type ConfigDumpLayer,
   type Profile,
 } from '@deepseek-ai/dsh-app-boot'
-import { loadMcpPatches, omdshHome } from './mcp-config.ts'
+import { omdshHome } from './config-paths.ts'
+import { loadLspPatches } from './lsp-config.ts'
+import { loadMcpPatches } from './mcp-config.ts'
 import { loadUserPatches, userPluginsPatches } from './user-patches.ts'
 
 type PatchOptions = ConfigDumpLayer['patches'][number]
@@ -137,9 +139,9 @@ export async function composeHealedLaunch(
 
 /**
  * Compose the live launch layers in product → user bundles → Profile patch
- * → home patch → MCP → `$OMDSH_HOME/omdsh` user plugins/patches →
+ * → home patch → MCP → LSP → `$OMDSH_HOME/omdsh` user plugins/patches →
  * agent-presets overlay order. The `omdsh/` namespace is this fork's
- * original user-layer discovery and stays after MCP so those files win.
+ * original user-layer discovery and stays after MCP/LSP so those files win.
  */
 export function composeLaunch(
   cwd: string = process.cwd(),
@@ -160,6 +162,8 @@ export function composeLaunch(
   if (homePatches !== undefined) layers.push({ label: PROFILE_PATCH_FILENAME, patches: homePatches })
   const mcp = loadMcpPatches(cwd, environment)
   if (mcp.length > 0) layers.push({ label: 'mcp.json', patches: mcp })
+  const lsp = loadLspPatches(cwd, environment)
+  if (lsp.length > 0) layers.push({ label: 'lsp.json', patches: lsp })
   if (userLayer) {
     const userPlugins = userPluginsPatches(environment)
     if (userPlugins.length > 0) layers.push({ label: 'omdsh/plugins.yml', patches: userPlugins })

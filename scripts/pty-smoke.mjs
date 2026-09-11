@@ -21,15 +21,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const cleanOutput = (value) => value.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '')
 const hasReasoningEffort = (value) => {
   const text = cleanOutput(value)
-  return /deepseek-v4-flash · (?:off|low|high|max)/u.test(text)
-    || (text.includes('deepseek-v4-flash') && /│\s+(?:off|low|high|max)\s+│/u.test(text))
+  return /deepseek-flash · (?:off|low|high|max)/u.test(text)
+    || (text.includes('deepseek-flash') && /│\s+(?:off|low|high|max)\s+│/u.test(text))
 }
 
 // OMDSH_RUN_MODE=built exercises the shipped artifact (lib/bin.js); the
 // default exercises the tsx source launch.
 const spawnCmd = process.env.OMDSH_RUN_MODE === 'built'
   ? [process.execPath, ['apps/omdsh/lib/bin.js']]
-  : ['pnpm', ['--dir', 'apps/omdsh', 'omdsh']]
+  : process.platform === 'win32'
+    // Windows resolves pnpm through a .cmd shim, so it needs a command shell.
+    ? ['cmd.exe', ['/d', '/s', '/c', 'pnpm', '--dir', 'apps/omdsh', 'omdsh']]
+    : ['pnpm', ['--dir', 'apps/omdsh', 'omdsh']]
 
 const smokeEnv = {
   ...process.env,
@@ -192,7 +195,7 @@ const ok = exitCode === 0
   && clean.includes('Recent header seed')
   && clean.includes('hi')
   && clean.includes('error:')
-  && clean.includes('deepseek-v4-flash')
+  && clean.includes('deepseek-flash')
   && hasReasoningEffort(clean)
   && clean.includes('Agent: PTC')
   && clean.includes('ptc')

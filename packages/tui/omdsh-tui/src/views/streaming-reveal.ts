@@ -9,15 +9,24 @@ import type { TranscriptState } from './event-views.ts'
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
+// Bounded segmentation cache: the latest streaming blocks are the only text
+// sliced per reveal tick, so counting and slicing share one grapheme list per
+// text instead of segmenting the growing answer twice every frame.
+const partsCache = new Map<string, string[]>()
+const PARTS_CACHE_LIMIT = 32
+
 function graphemes(text: string): string[] {
-  return [...segmenter.segment(text)].map(item => item.segment)
+  const hit = partsCache.get(text)
+  if (hit !== undefined) return hit
+  const parts = [...segmenter.segment(text)].map(item => item.segment)
+  if (partsCache.size >= PARTS_CACHE_LIMIT) partsCache.clear()
+  partsCache.set(text, parts)
+  return parts
 }
 
 /** Count user-visible text units without splitting emoji or combining marks. */
 export function revealUnitCount(text: string): number {
-  let count = 0
-  for (const _ of segmenter.segment(text)) count += 1
-  return count
+  return graphemes(text).length
 }
 
 /** Reveal enough units to catch an eight-frame backlog, with a small floor. */

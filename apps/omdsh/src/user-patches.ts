@@ -15,7 +15,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
-import { omdshHome } from './mcp-config.ts'
+import { omdshHome } from './config-paths.ts'
 
 /** The user patch layer inside the omdsh namespace of the Harness home. */
 export const USER_PATCH_FILENAME = 'cordis.patch.yml'
