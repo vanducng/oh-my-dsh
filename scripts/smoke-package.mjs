@@ -52,12 +52,14 @@ try {
   const cliTarball = join(temp, `vanducng-oh-my-dsh-${cliVersion}.tgz`)
   const prefix = join(temp, 'install')
   mkdirSync(prefix, { recursive: true })
+  // Pin the Cordis line DSH 0.1.5-rc.1 peers. npm `latest` can still resolve
+  // 4.0.1, and that host cannot keep a preset persona inside agent scope.
   writeFileSync(join(prefix, 'package.json'), JSON.stringify({
     private: true,
     overrides: {
-      '@deepseek-ai/cordis': '4.0.1',
-      '@deepseek-ai/cordis-plugin-include': '1.0.6',
-      '@deepseek-ai/cordis-plugin-group': '1.0.1',
+      '@deepseek-ai/cordis': '4.0.2',
+      '@deepseek-ai/cordis-plugin-include': '1.0.7',
+      '@deepseek-ai/cordis-plugin-group': '1.0.2',
     },
   }))
 
