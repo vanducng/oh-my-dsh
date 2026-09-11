@@ -216,9 +216,9 @@ describe('boot patch assembly', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { dependencies?: Record<string, string> }
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.5-rc.1')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.5-rc.1')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.5-rc.1')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.5-rc.2')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.5-rc.2')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.5-rc.2')
   })
 
   it('updates the provider output fallback without replacing its model catalog', () => {

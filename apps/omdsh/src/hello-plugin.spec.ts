@@ -139,7 +139,7 @@ describe('examples/hello bundle', () => {
     const tuiManifest = JSON.parse(readFileSync(join(tuiDir, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
     }
-    // npm latest can hoist `^0.1.5-rc.1` peers to 0.1.5-rc.2 beside the nested
+    // npm latest can hoist a newer `^0.1.5-rc.2` peer beside the nested
     // cohort. Dual dsh-scope copies make a preset persona register on the host.
     writeFileSync(join(installDir, 'package.json'), JSON.stringify({
       private: true,
