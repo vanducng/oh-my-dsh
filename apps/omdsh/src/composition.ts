@@ -10,7 +10,7 @@ import {
   type ConfigDumpLayer,
 } from '@deepseek-ai/dsh-app-boot'
 import type { LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
-import { composeLaunch, NAME } from './profile.ts'
+import { composeHealedLaunch, composeLaunch, NAME } from './profile.ts'
 
 export {
   homePatchPath,
@@ -47,6 +47,15 @@ export function dumpOmdshConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): string {
   const composed = composeLaunch(cwd, environment)
+  return renderConfigDump(NAME, composed.rootConfig, composed.layers)
+}
+
+/** Same dump as {@link dumpOmdshConfig}, after healing the installation fallback. */
+export async function dumpHealedOmdshConfig(
+  cwd: string = process.cwd(),
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const composed = await composeHealedLaunch(cwd, environment)
   return renderConfigDump(NAME, composed.rootConfig, composed.layers)
 }
 

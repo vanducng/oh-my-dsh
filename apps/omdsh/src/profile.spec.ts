@@ -66,6 +66,7 @@ describe('omdsh profile', () => {
       expect.objectContaining({
         id: 'agent-presets',
         config: expect.objectContaining({
+          includeShippedRoot: false,
           roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
         }),
       }),
