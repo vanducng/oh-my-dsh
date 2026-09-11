@@ -10,7 +10,7 @@
  * The module is excluded from the package build (`tsconfig.json`), is not
  * matched by the vitest `*.spec.ts` pattern, and is imported by test files
  * only. Product code must not depend on it.
- * @module @agi-fans/dsh-tui/width-oracle
+ * @module @vanducng/dsh-tui/width-oracle
  */
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })

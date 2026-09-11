@@ -5,7 +5,7 @@
  * build its bottom hint, and `views/hotkeys.ts` reads both it and the overlay
  * catalogs, so keeping the shared vocabulary here leaves that graph acyclic:
  * overlays never reach back into the help catalog that renders them.
- * @module @agi-fans/dsh-tui/hotkey-format
+ * @module @vanducng/dsh-tui/hotkey-format
  */
 
 /**
