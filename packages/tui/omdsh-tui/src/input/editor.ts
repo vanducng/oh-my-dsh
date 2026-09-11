@@ -6,6 +6,11 @@
  */
 
 import type { KeyEvent } from './keys.ts'
+import { moveGraphemeLeft, moveGraphemeRight, snapToGraphemeBoundary } from '../chrome/grapheme.ts'
+
+// Re-exported for existing importers; the implementation moved to
+// chrome/grapheme.ts so view-layer query editors share the same geometry.
+export { moveGraphemeLeft, moveGraphemeRight, snapToGraphemeBoundary }
 
 const MAX_UNDO = 80
 const MAX_KILLS = 60
@@ -71,6 +76,12 @@ export function lineEnd(text: string, cursor: number): number {
   return at < 0 ? text.length : at
 }
 
+
+
+
+
+
+
 /** Word-left: skip trailing whitespace, then the previous word. */
 export function moveWordLeft(text: string, cursor: number): number {
   let i = cursor
@@ -126,7 +137,7 @@ export class InputEditor {
   /** Replace the buffer (history recall). Clears undo. */
   setText(text: string, cursor = text.length): void {
     this.#text = text
-    this.#cursor = Math.max(0, Math.min(cursor, text.length))
+    this.#cursor = this.#snapCursor(Math.max(0, Math.min(cursor, text.length)))
     this.#undo = []
     this.#last = 'none'
     this.#yankLen = 0
@@ -135,7 +146,7 @@ export class InputEditor {
 
   /** Move the caret without changing text or undo. */
   setCursor(cursor: number): void {
-    this.#cursor = Math.max(0, Math.min(cursor, this.#text.length))
+    this.#cursor = this.#snapCursor(Math.max(0, Math.min(cursor, this.#text.length)))
     this.#last = 'none'
   }
 
@@ -199,10 +210,10 @@ export class InputEditor {
         return this.#vertical(1)
       case 'left':
       case 'ctrl+b':
-        return this.#moveTo(this.#cursor - 1)
+        return this.#moveTo(moveGraphemeLeft(this.#text, this.#cursor))
       case 'right':
       case 'ctrl+f':
-        return this.#moveTo(this.#cursor + 1)
+        return this.#moveTo(moveGraphemeRight(this.#text, this.#cursor))
       case 'home':
       case 'ctrl+a':
         return this.#moveTo(lineStart(this.#text, this.#cursor))
@@ -266,11 +277,16 @@ export class InputEditor {
   }
 
   #moveTo(cursor: number): EditorCommand {
-    const next = Math.max(0, Math.min(this.#text.length, cursor))
+    const next = this.#snapCursor(Math.max(0, Math.min(this.#text.length, cursor)))
     if (next === this.#cursor) return { kind: 'changed' }
     this.#cursor = next
     this.#last = 'none'
     return { kind: 'changed' }
+  }
+
+  /** Snap a UTF-16 offset to the grapheme boundary it belongs to (forward). */
+  #snapCursor(cursor: number): number {
+    return snapToGraphemeBoundary(this.#text, cursor)
   }
 
   #pushUndo(): void {
@@ -300,13 +316,15 @@ export class InputEditor {
   }
 
   #deleteBackward(): void {
-    if (this.#cursor === 0) return
-    this.#deleteRange(this.#cursor - 1, this.#cursor, 'backward')
+    const start = moveGraphemeLeft(this.#text, this.#cursor)
+    if (start === this.#cursor) return
+    this.#deleteRange(start, this.#cursor, 'backward')
   }
 
   #deleteForward(): void {
-    if (this.#cursor >= this.#text.length) return
-    this.#deleteRange(this.#cursor, this.#cursor + 1, 'forward')
+    const end = moveGraphemeRight(this.#text, this.#cursor)
+    if (end === this.#cursor) return
+    this.#deleteRange(this.#cursor, end, 'forward')
   }
 
   #deleteWordBackward(): void {

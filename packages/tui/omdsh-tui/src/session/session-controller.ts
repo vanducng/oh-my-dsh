@@ -20,11 +20,10 @@ import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets'
 import {
   createUserMessage,
   type LlmResolvedModelInfo,
-  type StreamChunk,
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import { isImageAdmissionError, type ImageAttachmentRef, type SaveImageAttachment, type StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
-import type { EncodedImageAttachment } from '@deepseek-ai/dsh-attachment/types'
+import type { CommandSubmitAttachment } from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-commands'
 import type { PermissionSelect } from '@deepseek-ai/dsh-permission-presets/types'
@@ -34,16 +33,24 @@ import { isUserInvocable, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/types'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import { readColdSessionLog } from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type { ContextBreakdownProjection, ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
 import { SessionId, SessionLogOffset, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-reference'
 import type {} from '@deepseek-ai/dsh-file-reference'
+import type {} from '@deepseek-ai/dsh-goal'
+import type { GoalProjection } from '@deepseek-ai/dsh-goal/types'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { queueHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import type { ToolPresentationMode } from '@deepseek-ai/dsh-tools'
+import type { StreamDelta } from '../views/event-views.ts'
+import { firstVisibleStreamTime } from '../views/stream-time.ts'
+import { LiveAttemptTracker } from './live-attempt-tracker.ts'
+import { jobNoticeFor } from './job-notice.ts'
 import type {
   TuiCommand,
+  TuiGoalStatus,
   TuiInspectedSubagent,
   TuiRecentSession,
   TuiService,
@@ -54,7 +61,7 @@ import type {
 } from '../definition.ts'
 import { descendantDepth, isSteerableSubagent, SubagentRoster } from './subagent-roster.ts'
 import type {} from '../runtime/tool-presentation.ts'
-import * as commandPermission from '../commands/permission.ts'
+import { commandPermission } from '../commands/permission.ts'
 import {
   isBlankSession,
   toolPresentationForPreset,
@@ -76,10 +83,8 @@ interface ConfiguredAgentContext {
   disposeToolPresentation: () => void
 }
 
-async function setupAgentContext(agentCtx: Context, selection: ModelSelectionRef): Promise<ConfiguredAgentContext> {
+async function setupAgentContext(agentCtx: Context, agent: Agent, selection: ModelSelectionRef): Promise<ConfiguredAgentContext> {
   installModelSelection(agentCtx, selection)
-  const agent = agentCtx.agent
-  if (agent === undefined) throw new Error('agent setup context has no agent')
   const agentPresets = agentCtx.get('agentPresets')
   const sessionProjections = agentCtx.get('sessionProjections')
   const tools = agentCtx.get('tools')
@@ -89,21 +94,8 @@ async function setupAgentContext(agentCtx: Context, selection: ModelSelectionRef
   const agentPreset = sessionProjections.stateOf(agent.session, 'agentPreset') ?? agentPresets.defaultId
   const mounted = await agentPresets.mount(agentCtx, agentPreset)
   const disposeToolPresentation = tools.presentAs(toolPresentationForPreset(mounted.id))
-  await agentCtx.plugin(commandPermission)
+  await agentCtx.plugin(commandPermission(agent))
   return { agentPreset: mounted.id, disposeToolPresentation }
-}
-
-/** Whether a stream chunk establishes the first visible model-output boundary. */
-function isVisibleModelDelta(chunk: StreamChunk): boolean {
-  switch (chunk.type) {
-    case 'text-delta':
-    case 'reasoning-delta':
-      return chunk.text !== ''
-    case 'tool-call-delta':
-      return chunk.argumentsDelta !== '' || chunk.name !== undefined
-    default:
-      return false
-  }
 }
 
 function parseControl(line: string): { name: string; input: string } | undefined {
@@ -120,13 +112,38 @@ export interface TuiStatsProjection {
   contextBreakdown?: ContextBreakdownProjection
   plan?: PlanProjection
   permissions?: PermissionSelect
+  goal?: GoalProjection | null
+  /** Last logged sandbox-mode override, or null before one; outranks the preset while set. */
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' | null
 }
 
 /** Present only the session controls whose owning Harness plugins are composed. */
 export function sessionControls(projection?: TuiStatsProjection): TuiSessionControls {
+  const override = projection?.sandboxMode
   return {
     ...(projection?.plan === undefined ? {} : { plan: { ...projection.plan } }),
-    ...(projection?.permissions === undefined ? {} : { permission: projection.permissions.currentValue }),
+    // A logged sandbox override (for example an approved widening) is the mode
+    // actually in force; the preset only describes the user's standing choice.
+    ...(override == null
+      ? (projection?.permissions === undefined ? {} : { permission: projection.permissions.currentValue })
+      : { permission: override }),
+    ...goalControl(projection?.goal),
+  }
+}
+
+/** A completed goal renders nothing, mirroring the projection's own visibility rule. */
+function goalControl(projection: GoalProjection | null | undefined): { goal?: TuiGoalStatus } {
+  if (projection === null || projection === undefined) return {}
+  const goal = projection.goal
+  if (goal.phase === 'complete') return {}
+  return {
+    goal: {
+      phase: goal.phase,
+      objective: goal.objective,
+      ...(goal.blockedReason === undefined ? {} : { blockedReason: goal.blockedReason.message }),
+      roundsStarted: projection.roundsStarted,
+      maxGoalRounds: goal.maxGoalRounds,
+    },
   }
 }
 
@@ -199,15 +216,6 @@ export function sessionStats(
       case 'step/start':
         openStep = { turn: event.data.turn, step: event.data.step, startTime: event.time }
         break
-      case 'assistant/chunk':
-        if (openStep !== undefined
-          && openStep.turn === event.data.turn
-          && openStep.step === event.data.step
-          && openStep.firstTokenTime === undefined
-          && isVisibleModelDelta(event.data.chunk)) {
-          openStep.firstTokenTime = event.time
-        }
-        break
       case 'assistant/message': {
         const usage = event.data.usage
         if (usage !== undefined) {
@@ -222,6 +230,12 @@ export function sessionStats(
         }
         if (openStep === undefined || openStep.turn !== event.data.turn || openStep.step !== event.data.step) break
         llmMs += Math.max(0, event.time - openStep.startTime)
+        // Format-v2 messages embed the exact timed stream; derive the first
+        // visible token time from it when live chunk edges were not observed.
+        if (openStep.firstTokenTime === undefined) {
+          const firstTime = firstVisibleStreamTime(event.data.stream)
+          if (firstTime !== undefined) openStep.firstTokenTime = firstTime
+        }
         if (openStep.firstTokenTime !== undefined) {
           ttftMs += Math.max(0, openStep.firstTokenTime - openStep.startTime)
           ttftSteps += 1
@@ -231,6 +245,17 @@ export function sessionStats(
           }
         }
         openStep = undefined
+        break
+      }
+      case 'assistant/attempt': {
+        // A failed attempt may still carry the step's first visible token;
+        // remember it without counting usage or closing the step (the later
+        // successful settlement folds the timing exactly once).
+        if (openStep === undefined || openStep.turn !== event.data.turn || openStep.step !== event.data.step) break
+        if (openStep.firstTokenTime === undefined) {
+          const firstTime = firstVisibleStreamTime(event.data.stream)
+          if (firstTime !== undefined) openStep.firstTokenTime = firstTime
+        }
         break
       }
       case 'tool/call':
@@ -285,7 +310,9 @@ export function sessionStats(
  * fallback fold when projections are absent.
  */
 export function shouldRefreshSessionInfoAfter(event: SessionEvent): boolean {
-  return event.type !== 'assistant/chunk'
+  // Live streaming no longer publishes session events; only durable
+  // settlements reach this fold, and `assistant/attempt` carries no usage.
+  return event.type !== 'assistant/attempt'
 }
 
 function explicitSessionTitle(events: readonly SessionEvent[]): string | undefined {
@@ -429,8 +456,9 @@ export async function createSubmissionMessage(
 }
 
 /** Encode composer drafts for `ctx.commands.execute`. */
-export function encodeComposerImages(images: readonly TuiInputImage[]): EncodedImageAttachment[] {
+export function encodeCommandAttachments(images: readonly TuiInputImage[]): CommandSubmitAttachment[] {
   return images.map(image => ({
+    type: 'image',
     mediaType: image.mediaType,
     data: Buffer.from(image.data).toString('base64'),
     ...(image.name === undefined ? {} : { name: image.name }),
@@ -475,11 +503,18 @@ export class SessionRuntime {
   #skillCommands: TuiCommand[] = []
   #started = false
   readonly #retired: AgentHandle[] = []
+  // Weak: deduplication must not retain disposed session graphs.
+  readonly #releasedHandles = new WeakSet<AgentHandle>()
   #disposed = false
   readonly #off: Array<() => void> = []
   readonly #subagents = new SubagentRoster()
+  readonly #streamAttempts = new LiveAttemptTracker()
+  readonly #recentCache = new Map<string, { revision: string; row: TuiRecentSession }>()
+  #refreshInFlight: Promise<void> | null = null
+  #refreshDirty = false
   #subagentEpoch = 0
   #inspectEpoch = 0
+  #activationEpoch = 0
   #inspectedId: string | undefined
 
   constructor(ctx: Context, tui: TuiService) {
@@ -508,6 +543,13 @@ export class SessionRuntime {
         data: image.data,
         mediaType: image.mediaType,
         ...(image.name === undefined ? {} : { name: image.name }),
+      }))
+    }
+    const jobs = this.#ctx.get('jobs')
+    if (jobs !== undefined) {
+      this.#off.push(jobs.onJobDone((snapshot, owner) => {
+        const notice = jobNoticeFor(snapshot, owner, this.#active?.handle.agent)
+        if (notice !== undefined) tui.notice(notice)
       }))
     }
     this.#off.push(ctx.on('agent/status', (payload) => {
@@ -539,12 +581,31 @@ export class SessionRuntime {
         if (this.#inspectedId === undefined) {
           tui.event(event, ctx.get('tuiToolPresentation')?.event(active.handle.agent, event))
         }
+        if (event.type === 'subagent/catalog') this.#observeCatalogChildren(session, [event])
         if (shouldRefreshSessionInfoAfter(event)) this.#pushSessionInfo()
         if (event.type === 'session/title') void this.refreshRecent()
         return
       }
       this.#noteSubagentEvent(session, event)
     }))
+    // Format v2 moved live assistant increments off the session log. The
+    // durable `session/event` firehose now carries only settlements; chunk
+    // frames arrive on this agent-scoped stream and are folded into the
+    // transcript (or the subagent roster) as transient deltas.
+    this.#off.push(ctx.on('agent/assistant-stream', (payload) => {
+      const frame = payload.frame
+      const key = `${payload.agent.session.id}:${frame.attemptId}`
+      if (frame.type === 'start') {
+        this.#streamAttempts.start(key, frame)
+        return
+      }
+      if (frame.type === 'end') {
+        this.#streamAttempts.end(key)
+        return
+      }
+      const delta = this.#streamAttempts.chunk(key, frame)
+      if (delta !== undefined) this.#forwardLiveDelta(payload.agent, delta)
+    }, { global: true }))
     if (ctx.get('commands') !== undefined) {
       this.#off.push(ctx.on('commands/change', () => { this.#pushCommands() }))
     }
@@ -563,7 +624,7 @@ export class SessionRuntime {
       this.#off.push(projections.onChanged((session, key) => {
         if (session !== this.#active?.handle.agent.session) return
         if (key === 'sessionStats' || key === 'tokenUsage' || key === 'contextPressure' || key === 'contextBreakdown'
-          || key === 'plan' || key === 'permissions') this.#pushSessionInfo()
+          || key === 'plan' || key === 'permissions' || key === 'goal') this.#pushSessionInfo()
       }))
     }
   }
@@ -653,7 +714,7 @@ export class SessionRuntime {
         return await commands?.execute(
           this.#requiredAgent(),
           commandLine,
-          encodeComposerImages(images),
+          encodeCommandAttachments(images),
           signal,
         )
       } finally {
@@ -698,8 +759,13 @@ export class SessionRuntime {
     return current
   }
 
-  /** Replace the active Agent's selection and persist it as the next default. */
-  async changeSelection(agent: Agent, selection: ModelSelection, info?: LlmResolvedModelInfo): Promise<void> {
+  /** Replace the active Agent's selection, optionally persisting it as the next default. */
+  async changeSelection(
+    agent: Agent,
+    selection: ModelSelection,
+    info?: LlmResolvedModelInfo,
+    options?: { persist?: boolean },
+  ): Promise<void> {
     this.assertActive(agent)
     const active = this.#requiredActive()
     active.selection.current = selection
@@ -709,7 +775,9 @@ export class SessionRuntime {
     active.reasoningEffort = status.reasoningEffort
     this.#tui.setModel(status.model, status.reasoningEffort)
     this.#pushSessionInfo()
-    await this.#ctx.get('agentDefaultModel')?.saveSelection(selection)
+    if (options?.persist !== false) {
+      await this.#ctx.get('agentDefaultModel')?.saveSelection(selection)
+    }
   }
 
   /** Start a new top-level session with the current model selection. */
@@ -740,7 +808,7 @@ export class SessionRuntime {
       resumeSessionId: SessionId(id),
       agentOptions: { provider: selection.provider, model: selection.model },
       signal,
-      setup: async (agentCtx) => { await setupAgentContext(agentCtx, ref) },
+      setup: async (agentCtx, agent) => { await setupAgentContext(agentCtx, agent, ref) },
     })
     try {
       this.#ctx.sessionTitle.rename(handle.agent.session, title)
@@ -829,7 +897,7 @@ export class SessionRuntime {
       inheritedEventCount: SessionLogOffset(selected.branchIndex),
       agentOptions: { provider: selection.provider, model: selection.model },
       signal,
-      setup: async (agentCtx) => { configured = await setupAgentContext(agentCtx, ref) },
+      setup: async (agentCtx, agent) => { configured = await setupAgentContext(agentCtx, agent, ref) },
     })
     try {
       this.assertActive(agent)
@@ -930,29 +998,59 @@ export class SessionRuntime {
   }
 
   async refreshRecent(): Promise<void> {
+    // Coalesce concurrent callers: the recent list is one snapshot, and a
+    // burst of title/status events must not queue a read of every stored log.
+    if (this.#refreshInFlight !== null) {
+      // Mark the invalidation observed during the snapshot so one trailing
+      // refresh publishes it instead of dropping the change.
+      this.#refreshDirty = true
+      return this.#refreshInFlight
+    }
+    const run = (async () => {
+      for (;;) {
+        await this.#refreshRecentNow()
+        if (!this.#refreshDirty || this.#disposed) break
+        this.#refreshDirty = false
+      }
+    })().finally(() => { this.#refreshInFlight = null })
+    this.#refreshInFlight = run
+    return run
+  }
+
+  async #refreshRecentNow(): Promise<void> {
     const persistence = this.#ctx.get('sessionPersistence')
     if (persistence === undefined) {
       this.#recent = []
       this.#pushSessionInfo()
       return
     }
-    const headers = (await persistence.list()).filter(header => header.origin !== 'subagent')
-      .sort((left, right) => right.createdAt - left.createdAt)
+    const snapshots = (await persistence.list()).filter(snapshot => snapshot.header.origin !== 'subagent')
+      .sort((left, right) => right.header.createdAt - left.header.createdAt)
     const rows: TuiRecentSession[] = []
-    for (const header of headers) {
+    const liveIds = new Set<string>(snapshots.map(snapshot => snapshot.header.id))
+    for (const id of this.#recentCache.keys()) if (!liveIds.has(id)) this.#recentCache.delete(id)
+    for (const snapshot of snapshots) {
+      const header = snapshot.header
+      const cached = this.#recentCache.get(header.id)
+      if (cached?.revision === snapshot.revision) {
+        rows.push(cached.row)
+        continue
+      }
       try {
-        const inspected = await persistence.inspect(header.id)
-        const status = recentSessionStatus(inspected.events)
-        const content = recentSessionContent(inspected.events)
+        const log = await readColdSessionLog(persistence, header.id)
+        const status = recentSessionStatus(log.events)
+        const content = recentSessionContent(log.events)
         if (content === undefined) continue
-        rows.push({
+        const row: TuiRecentSession = {
           id: header.id,
           ...content,
           createdAt: header.createdAt,
-          updatedAt: inspected.events.at(-1)?.time ?? header.createdAt,
-          eventCount: inspected.events.length,
+          updatedAt: log.events.at(-1)?.time ?? header.createdAt,
+          eventCount: log.events.length,
           ...(status === undefined ? {} : { status }),
-        })
+        }
+        this.#recentCache.set(header.id, { revision: snapshot.revision, row })
+        rows.push(row)
       } catch {
         rows.push({ id: header.id, title: '(unavailable session)', createdAt: header.createdAt })
       }
@@ -965,6 +1063,7 @@ export class SessionRuntime {
     if (this.#disposed) return
     this.#disposed = true
     this.#subagentEpoch += 1
+    this.#activationEpoch += 1
     this.#inspectedId = undefined
     this.#subagents.reset()
     this.#tui.setInspectedSubagent(undefined)
@@ -973,9 +1072,13 @@ export class SessionRuntime {
     this.#tui.setFileSearch()
     this.#tui.setImageValidator()
     for (const off of this.#off.splice(0).reverse()) off()
-    await Promise.allSettled(this.#retired.splice(0).map(handle => handle.dispose()))
-    await this.#active?.handle.dispose()
+    const handles = this.#retired.splice(0)
+    const active = this.#active
     this.#active = undefined
+    if (active !== undefined) handles.push(active.handle)
+    // Own every handle here so a late activation cannot double-release it.
+    for (const handle of handles) this.#releasedHandles.add(handle)
+    await Promise.allSettled(handles.map(handle => handle.dispose()))
   }
 
   async #create(selection: ModelSelection): Promise<ActiveSession> {
@@ -986,7 +1089,7 @@ export class SessionRuntime {
       sessionId: SessionId('session-' + randomUUID()),
       meta: { cwd: process.cwd(), agentPreset: preset.id },
       agentOptions: { provider: selection.provider, model: selection.model },
-      setup: async (agentCtx) => { configured = await setupAgentContext(agentCtx, ref) },
+      setup: async (agentCtx, agent) => { configured = await setupAgentContext(agentCtx, agent, ref) },
     })
     const configuration = configured
     if (configuration === undefined) {
@@ -1010,7 +1113,7 @@ export class SessionRuntime {
       resumeSessionId: SessionId(id),
       agentOptions: { provider: selection.provider, model: selection.model },
       signal,
-      setup: async (agentCtx) => { configured = await setupAgentContext(agentCtx, ref) },
+      setup: async (agentCtx, agent) => { configured = await setupAgentContext(agentCtx, agent, ref) },
     })
     const configuration = configured
     if (configuration === undefined) {
@@ -1037,9 +1140,72 @@ export class SessionRuntime {
 
   async #activate(next: ActiveSession, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
+    // Reject a late create before it publishes UI on a disposed tree.
+    if (this.#disposed) {
+      this.#releaseHandle(next.handle)
+      return
+    }
     const previous = this.#active
+    const epoch = ++this.#activationEpoch
     this.#active = next
-    const agent = next.handle.agent
+    try {
+      this.#presentAgent(next)
+      const selected = this.selection(next.handle.agent)
+      const info = await this.#resolveModelInfo(selected)
+      signal?.throwIfAborted()
+      if (this.#disposed || this.#activationEpoch !== epoch) {
+        // Dispose (or a newer activation) already reclaimed the visible
+        // handle; the superseded previous agent is the one still unowned.
+        if (previous !== undefined) this.#releaseHandle(previous.handle)
+        return
+      }
+      next.contextWindow = info?.context?.contextWindow
+      const status = modelStatus(selected, info)
+      next.reasoningEffort = status.reasoningEffort
+      this.#tui.setModel(status.model, status.reasoningEffort)
+      await this.#refreshSkills()
+      signal?.throwIfAborted()
+      if (this.#disposed || this.#activationEpoch !== epoch) {
+        if (previous !== undefined) this.#releaseHandle(previous.handle)
+        return
+      }
+      this.#pushSessionInfo()
+    } catch (error: unknown) {
+      // A rejected activation must not orphan the freshly created handle nor
+      // leave the screen on an agent that is no longer active: revert the
+      // slot and re-present the previous agent. The rejected handle joins
+      // teardown ownership even when the rollback presentation itself fails,
+      // and the activation failure remains the actionable error.
+      try {
+        if (this.#activationEpoch === epoch) {
+          this.#active = previous
+          if (previous !== undefined) {
+            try {
+              this.#presentAgent(previous)
+            } catch (rollback: unknown) {
+              try {
+                this.#tui.notice(rollback instanceof Error ? rollback.message : String(rollback), { level: 'error' })
+              } catch {
+                // The display itself is failing; the activation error stays primary.
+              }
+            }
+          }
+        } else if (previous !== undefined) {
+          // A dispose or a newer activation owns the visible handle chain;
+          // only the superseded previous agent is still unowned here.
+          this.#releaseHandle(previous.handle)
+        }
+      } finally {
+        if (this.#activationEpoch === epoch) this.#releaseHandle(next.handle)
+      }
+      throw error
+    }
+    if (previous !== undefined) this.#releaseHandle(previous.handle)
+  }
+
+  /** Show one active session on the terminal: transcript, tools, controls, model. */
+  #presentAgent(active: ActiveSession): void {
+    const agent = active.handle.agent
     this.#inspectedId = undefined
     this.#tui.setInspectedSubagent(undefined)
     this.#tui.setStatus(agent.status)
@@ -1049,17 +1215,21 @@ export class SessionRuntime {
     this.#pushSessionInfo()
     this.#replaceTranscript(agent)
     this.#pushTools()
+    this.#pushCommands()
     const selected = this.selection(agent)
-    const info = await this.#resolveModelInfo(selected)
-    signal?.throwIfAborted()
-    next.contextWindow = info?.context?.contextWindow
-    const status = modelStatus(selected, info)
-    next.reasoningEffort = status.reasoningEffort
-    this.#tui.setModel(status.model, status.reasoningEffort)
-    await this.#refreshSkills()
-    signal?.throwIfAborted()
-    this.#pushSessionInfo()
-    if (previous !== undefined) this.#retired.push(previous.handle)
+    const status = modelStatus(selected, undefined)
+    this.#tui.setModel(status.model, status.reasoningEffort ?? active.reasoningEffort)
+  }
+
+  /** Retire one agent handle once; a raced dispose takes it directly. */
+  #releaseHandle(handle: AgentHandle): void {
+    if (this.#releasedHandles.has(handle)) return
+    this.#releasedHandles.add(handle)
+    if (this.#disposed) {
+      void handle.dispose().catch(() => {})
+      return
+    }
+    this.#retired.push(handle)
   }
 
   #pushCommands(): void {
@@ -1138,6 +1308,46 @@ export class SessionRuntime {
     this.#pushSubagents()
   }
 
+  /**
+   * Add the direct children a Session's durable catalog declares.
+   *
+   * The live roster is built from `session/created` and child events, so a
+   * resumed parent would otherwise show nothing: its children are neither
+   * loaded nor replayed. Catalog facts are durable, so a restored roster still
+   * lists those children, and `#inspectSubagent` opens each transcript from
+   * disk. Children the live path already knows keep their own state.
+   */
+  #observeCatalogChildren(session: Session, events: readonly SessionEvent[]): void {
+    if (this.#subagents.observeCatalog(session.id, events)) this.#pushSubagents()
+  }
+
+  /** Route one live assistant stream chunk to the visible transcript or the subagent roster. */
+  #forwardLiveDelta(agent: Agent, delta: StreamDelta): void {
+    const active = this.#active
+    if (active !== undefined && agent.session.id === active.handle.agent.session.id) {
+      if (this.#inspectedId === undefined) this.#tui.streamDelta(delta)
+      return
+    }
+    if (agent.session.id === this.#inspectedId) {
+      this.#tui.streamDelta(delta)
+      return
+    }
+    if (this.#subagents.applyDelta(agent.session.id, delta.chunk) !== undefined) this.#pushSubagents()
+  }
+
+  /**
+   * Replay the buffered live deltas of one session after a transcript
+   * rebuild. The durable log only carries settlements, so a rebuilt state
+   * starts without any in-flight prefix; re-folding the buffered chunks
+   * restores it without waiting for the next frame.
+   */
+  #replayLivePrefix(sessionId: string): void {
+    for (const key of this.#streamAttempts.activeKeys()) {
+      if (!key.startsWith(`${sessionId}:`)) continue
+      for (const delta of this.#streamAttempts.deltas(key)) this.#tui.streamDelta(delta)
+    }
+  }
+
   #noteSubagentStatus(session: Session, status: 'idle' | 'running'): void {
     if (this.#subagents.owns(session.id)) {
       this.#subagents.setAgentStatus(session.id, status)
@@ -1207,8 +1417,10 @@ export class SessionRuntime {
     if (active === undefined) return
     const agent = active.handle.agent
     const projection = this.#projection(active)
+    const title = explicitSessionTitle(agent.session.snapshotEvents())
     this.#tui.setSession({
       id: agent.id,
+      ...(title === undefined ? {} : { title }),
       recent: this.#recent.filter(row => row.id !== agent.id),
       stats: this.#stats(active, projection),
       controls: this.#sessionControls(active, projection),
@@ -1232,7 +1444,9 @@ export class SessionRuntime {
 
   #replaceTranscript(agent: Agent): void {
     const events = agent.session.snapshotEvents()
+    this.#observeCatalogChildren(agent.session, events)
     this.#tui.replaceSession(events, this.#ctx.get('tuiToolPresentation')?.session(agent, events), agent.status)
+    this.#replayLivePrefix(agent.session.id)
   }
 
   #replaceVisibleTranscript(): void {
@@ -1268,9 +1482,10 @@ export class SessionRuntime {
       events = live.ownEvents()
     } else {
       try {
-        const inspected = await this.#ctx.get('sessionPersistence')?.inspect(SessionId(id))
-        if (inspected === undefined) throw new Error('subagent transcript is unavailable')
-        events = inspected.events.slice(inspected.inheritedEventCount)
+        const persistence = this.#ctx.get('sessionPersistence')
+        const log = persistence === undefined ? undefined : await readColdSessionLog(persistence, SessionId(id))
+        if (log === undefined) throw new Error('subagent transcript is unavailable')
+        events = log.events.slice(log.inheritedEventCount)
       } catch {
         if (request === this.#inspectEpoch) {
           this.#tui.notice('Unable to open that subagent transcript.', { level: 'error' })
@@ -1286,6 +1501,7 @@ export class SessionRuntime {
       child === undefined ? undefined : this.#ctx.get('tuiToolPresentation')?.session(child, events),
       child?.status ?? 'idle',
     )
+    this.#replayLivePrefix(id)
     this.#tui.setInspectedSubagent(this.#inspectView(
       id,
       child?.status === 'running' ? 'running' : 'waiting',

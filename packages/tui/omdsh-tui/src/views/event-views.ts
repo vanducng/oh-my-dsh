@@ -11,7 +11,8 @@
 
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
-import type { ContentBlock, ToolCallId, UserMessage } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-compaction'
+import type { ContentBlock, StreamChunk, ToolCallId, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, ToolResultMessage } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import type {} from '@deepseek-ai/dsh-tool-todo'
@@ -33,8 +34,9 @@ import {
   type PromptSelectorState,
 } from './prompt-selector.ts'
 import { resolveStatusBarConfig, type StatusBarConfig, type StatusPreset } from '../chrome/status-config.ts'
-import { renderPermissionBadge, renderStatusFooter } from '../chrome/status-line.ts'
+import { renderPermissionBadge, renderStatusFooter, formatTokens } from '../chrome/status-line.ts'
 import { createTheme, SPINNER, SYMBOL, type Theme, type ThemeName } from '../chrome/theme.ts'
+import { renderGoalBar } from '../chrome/goal-bar.ts'
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from '../chrome/width.ts'
 import type {
   TuiInspectedSubagent,
@@ -59,6 +61,7 @@ import { renderToolsPanel, type ToolInfo } from '../chrome/tools-list.ts'
 import { renderCommandOutput, renderCommandSeparator } from '../chrome/command-output.ts'
 import type { WelcomeTip } from '../chrome/welcome-tips.ts'
 import { renderPathMentionRows } from '../chrome/path-mentions.ts'
+import { blockMatchesQuery, transcriptSearchHint } from './transcript-search.ts'
 import type { MotionMode } from '../session/tui-settings.ts'
 
 type TodoItem = Extract<SessionEvent, { type: 'todo/write' }>['data']['todos'][number]
@@ -114,6 +117,12 @@ export interface TranscriptState {
   todos: TodoItem[]
   /** Lifecycle id of a manual compact command currently owning the UI. */
   compactCommandId: string | undefined
+  /**
+   * Durable compaction in flight: its identity, the shadow price its summary
+   * reported, and the status to restore when it settles. Automatic compaction
+   * runs inside an open turn, so the restored status is usually `running`.
+   */
+  compaction: { id: string; events: number; tokens: number; resume: SessionStatus } | undefined
   /** Durable follow-up turns waiting in the Harness-owned agent inbox. */
   nextTurnInbox: UserMessage[]
   /** Durable steering/context waiting for a later step (kept for splice fidelity). */
@@ -128,6 +137,7 @@ export function initialTranscript(): TranscriptState {
     turn: 0,
     todos: [],
     compactCommandId: undefined,
+    compaction: undefined,
     nextTurnInbox: [],
     nextStepInbox: [],
   }
@@ -141,6 +151,10 @@ function contentToText(content: readonly ContentBlock[]): string {
       if (block.type === 'image') {
         const ref = block.attachment
         return [`[image ${ref.width}×${ref.height} · ${ref.mediaType}]`]
+      }
+      if (block.type === 'file') {
+        const ref = block.attachment
+        return [`[file ${ref.name} · ${ref.bytes} bytes]`]
       }
       return []
     })
@@ -184,6 +198,28 @@ const MAX_TOKENS_TOOL_NOTICE = 'Output token limit reached. A partial tool call 
 const INTERRUPTED_NOTICE = 'Session was interrupted before completion.'
 const INTERRUPTED_TOOL_NOTICE = 'Session was interrupted before completion. A partial tool call was not executed.'
 const UNFINISHED_TOOL_OUTPUT = 'No durable tool result was recorded before the turn ended. The tool\'s outcome is unknown.'
+
+const COMPACTED_NOTICE_PREFIX = 'Context compacted'
+const TRIMMED_NOTICE_PREFIX = 'Context trimmed'
+
+/** One-line condensation record: what the model's view lost and how much. */
+function compactionNoticeText(action: 'compacted' | 'trimmed', events: number, tokens: number): string {
+  const parts: string[] = []
+  if (events > 0) parts.push(`${events} ${action === 'compacted' ? 'events' : 'results'}`)
+  if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens condensed`)
+  const head = action === 'compacted' ? COMPACTED_NOTICE_PREFIX : TRIMMED_NOTICE_PREFIX
+  return parts.length === 0 ? head : `${head} · ${parts.join(' · ')}`
+}
+
+function isCompactionNotice(block: Block | undefined): boolean {
+  return block?.kind === 'notice'
+    && (block.text.startsWith(COMPACTED_NOTICE_PREFIX) || block.text.startsWith(TRIMMED_NOTICE_PREFIX))
+}
+
+/** Replace the previous cycle's condensation notice instead of stacking them. */
+function dropCompactionNotice(blocks: Block[]): void {
+  if (isCompactionNotice(blocks[blocks.length - 1])) blocks.pop()
+}
 
 interface ReplayIndexes {
   readonly toolByCallId: Map<string, number>
@@ -288,6 +324,69 @@ function settleAssistant(
 }
 
 /**
+ * One live assistant stream delta: a chunk folded with the owning attempt's
+ * turn/step (live frames carry neither durable seq nor turn/step; the bridge
+ * records them from the attempt's start frame).
+ */
+export interface StreamDelta {
+  readonly turn: number
+  readonly step: number
+  readonly chunk: StreamChunk
+}
+
+/**
+ * Fold one live assistant stream chunk into the transcript state. Durable
+ * settlement still arrives as `assistant/message` (or `assistant/attempt`
+ * for a committed attempt with no surface message) on the session log.
+ */
+export function applyStreamChunk(state: TranscriptState, delta: StreamDelta): TranscriptState {
+  const { turn, step, chunk } = delta
+  if (chunk.type === 'text-delta') {
+    const blocks = editableBlocks(state, false)
+    dropRetryNotice(blocks)
+    const last = blocks[blocks.length - 1]
+    if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
+      blocks[blocks.length - 1] = { ...last, text: last.text + chunk.text }
+    } else {
+      blocks.push({ kind: 'assistant', turn, step, text: chunk.text, reasoning: '', streaming: true })
+    }
+    return { ...state, blocks }
+  }
+  if (chunk.type === 'reasoning-delta') {
+    const blocks = editableBlocks(state, false)
+    dropRetryNotice(blocks)
+    const last = blocks[blocks.length - 1]
+    if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
+      blocks[blocks.length - 1] = { ...last, reasoning: last.reasoning + chunk.text }
+    } else {
+      blocks.push({ kind: 'assistant', turn, step, text: '', reasoning: chunk.text, streaming: true })
+    }
+    return { ...state, blocks }
+  }
+  if (chunk.type === 'tool-call-delta') {
+    const blocks = editableBlocks(state, false)
+    dropRetryNotice(blocks)
+    const index = blocks.findIndex(block => block.kind === 'tool' && block.callId === chunk.id)
+    const existing = blocks[index]
+    if (existing?.kind === 'tool') {
+      blocks[index] = {
+        ...existing,
+        name: chunk.name ?? existing.name,
+        args: existing.args + chunk.argumentsDelta,
+        partial: true,
+      }
+    } else {
+      blocks.push({
+        kind: 'tool', callId: chunk.id, name: chunk.name ?? 'tool',
+        args: chunk.argumentsDelta, status: 'running', output: '', partial: true,
+      })
+    }
+    return { ...state, blocks }
+  }
+  return state
+}
+
+/**
  * Fold one session-log event into the transcript state.
  * @param state - prior state.
  * @param event - the appended session event.
@@ -333,7 +432,7 @@ function foldEvent(
 ): TranscriptState {
   switch (event.type) {
     case 'turn/start':
-      return { ...state, status: 'running', turn: event.data.turn, todos: [], compactCommandId: undefined }
+      return { ...state, status: 'running', turn: event.data.turn, todos: [], compactCommandId: undefined, compaction: undefined }
     case 'llm/retry': {
       const blocks = editableBlocks(state, mutable)
       hideFailedAttempt(blocks, event.data.turn, event.data.step, indexes)
@@ -378,7 +477,9 @@ function foldEvent(
           block.kind === 'assistant' && block.turn === event.data.turn && block.interrupted === true)
         if (!interruptedAssistant) blocks.push({ kind: 'notice', level: 'info', text: 'interrupted' })
       }
-      return { ...state, blocks, status: 'idle', compactCommandId: undefined }
+      // A compaction still open here cannot be the turn's own: clear it so a
+      // late `compaction/end` cannot restore a stale running status.
+      return { ...state, blocks, status: 'idle', compactCommandId: undefined, compaction: undefined }
     }
     case 'user/message': {
       // Synthetic plugin injections (system-prompt runtime context, skill
@@ -391,53 +492,9 @@ function foldEvent(
       blocks.push({ kind: 'user', text })
       return { ...state, blocks }
     }
-    case 'assistant/chunk': {
-      const { turn, step, chunk } = event.data
-      if (chunk.type === 'text-delta') {
-        const blocks = editableBlocks(state, mutable)
-        dropRetryNotice(blocks)
-        const last = blocks[blocks.length - 1]
-        if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
-          blocks[blocks.length - 1] = { ...last, text: last.text + chunk.text }
-        } else {
-          blocks.push({ kind: 'assistant', turn, step, text: chunk.text, reasoning: '', streaming: true })
-        }
-        return { ...state, blocks }
-      }
-      if (chunk.type === 'reasoning-delta') {
-        const blocks = editableBlocks(state, mutable)
-        dropRetryNotice(blocks)
-        const last = blocks[blocks.length - 1]
-        if (last?.kind === 'assistant' && last.streaming && last.turn === turn && last.step === step) {
-          blocks[blocks.length - 1] = { ...last, reasoning: last.reasoning + chunk.text }
-        } else {
-          blocks.push({ kind: 'assistant', turn, step, text: '', reasoning: chunk.text, streaming: true })
-        }
-        return { ...state, blocks }
-      }
-      if (chunk.type === 'tool-call-delta') {
-        const blocks = editableBlocks(state, mutable)
-        dropRetryNotice(blocks)
-        const index = indexes === undefined
-          ? blocks.findIndex(block => block.kind === 'tool' && block.callId === chunk.id)
-          : indexes.toolByCallId.get(chunk.id) ?? -1
-        const existing = blocks[index]
-        if (existing?.kind === 'tool') {
-          blocks[index] = {
-            ...existing,
-            name: chunk.name ?? existing.name,
-            args: existing.args + chunk.argumentsDelta,
-            partial: true,
-          }
-        } else {
-          blocks.push({
-            kind: 'tool', callId: chunk.id, name: chunk.name ?? 'tool',
-            args: chunk.argumentsDelta, status: 'running', output: '', partial: true,
-          })
-          indexes?.toolByCallId.set(chunk.id, blocks.length - 1)
-        }
-        return { ...state, blocks }
-      }
+    case 'assistant/attempt': {
+      // A settled model attempt with no surface message (failed, retried,
+      // cancelled, or stream-error) leaves no visible transcript row.
       return state
     }
     case 'assistant/message': {
@@ -487,7 +544,60 @@ function foldEvent(
       }
     case 'command/done':
       if (state.compactCommandId !== event.data.commandId) return state
-      return { ...state, status: 'idle', compactCommandId: undefined }
+      return {
+        ...state,
+        compactCommandId: undefined,
+        status: state.compaction === undefined ? 'idle' : 'compacting',
+      }
+    // Durable condensation. The manual `/compact` command and the automatic
+    // pressure path emit the same lifecycle, so one set of cases covers both.
+    case 'compaction/start':
+      return {
+        ...state,
+        status: 'compacting',
+        compaction: { id: event.data.compactionId, events: 0, tokens: 0, resume: state.status },
+      }
+    case 'compaction/summary': {
+      if (state.compaction?.id !== event.data.compactionId) return state
+      return {
+        ...state,
+        compaction: {
+          id: state.compaction.id,
+          events: event.data.shadowedSeqs.length,
+          tokens: event.data.shadowedTokenCount,
+          resume: state.compaction.resume,
+        },
+      }
+    }
+    case 'compaction/end': {
+      if (state.compaction?.id !== event.data.compactionId) return state
+      const error = event.data.error
+      const notice = error !== undefined
+        ? `Context compaction failed: ${error}`
+        : state.compaction.events === 0 && state.compaction.tokens === 0
+          ? undefined
+          : compactionNoticeText('compacted', state.compaction.events, state.compaction.tokens)
+      if (notice === undefined) {
+        return { ...state, compaction: undefined, status: state.compaction.resume }
+      }
+      const blocks = editableBlocks(state, mutable)
+      dropCompactionNotice(blocks)
+      blocks.push({ kind: 'notice', level: error === undefined ? 'info' : 'error', text: notice })
+      return { ...state, blocks, compaction: undefined, status: state.compaction.resume }
+    }
+    // The model-free prune pass runs before a summarizing compaction, so its
+    // notice is superseded when a summary follows in the same cycle.
+    case 'compaction/prune': {
+      if (event.data.shadowedSeqs.length === 0) return state
+      const blocks = editableBlocks(state, mutable)
+      dropCompactionNotice(blocks)
+      blocks.push({
+        kind: 'notice',
+        level: 'info',
+        text: compactionNoticeText('trimmed', event.data.shadowedSeqs.length, event.data.shadowedTokenCount),
+      })
+      return { ...state, blocks }
+    }
     case 'agent/inbox/spliced': {
       const key = event.data.target === 'next-turn' ? 'nextTurnInbox' : 'nextStepInbox'
       return {
@@ -564,6 +674,8 @@ export interface ViewOptions {
   model: string
   /** Effective reasoning effort for the selected model, including adapter defaults. */
   reasoningEffort?: string
+  /** Folded session title; rendered only when the footer's `session` item is enabled. */
+  sessionTitle?: string
   /** Current input buffer text. */
   input: string
   /** Cursor column inside the input buffer (0-based, before the prefix). */
@@ -633,6 +745,12 @@ export interface ViewOptions {
   scrollStart?: number
   /** Open one transcript block at its first row instead of following the tail. */
   focusBlock?: number
+  /**
+   * Active transcript search. Matching block rows containing the query paint
+   * inverse; `matches` are block indexes in render order and `focus` selects
+   * the one the caller has scrolled to.
+   */
+  transcriptSearch?: { query: string; matches: readonly number[]; focus: number; editing: boolean }
   /**
    * When true, tool blocks paint their full output (OMP `ctrl+o`). Default
    * is the collapsed preview of {@link TOOL_COLLAPSED_LINES} rows.
@@ -861,6 +979,18 @@ export function blockLines(
   }, theme)
 }
 
+/** Plain text of one block, used by transcript search and match painting. */
+export function blockSearchText(block: Block): string {
+  if (block.kind === 'assistant') {
+    return block.reasoning === '' ? block.text : `${block.reasoning}\n${block.text}`
+  }
+  if (block.kind === 'tool') return `${block.args}\n${block.output}`
+  if (block.kind === 'toolCatalog') {
+    return block.tools.map(tool => `${tool.name} ${tool.description}`).join('\n')
+  }
+  return block.text
+}
+
 function fitFrame(lines: string[], width: number, stablePrefix = 0): string[] {
   let fitted: string[] | undefined
   const start = Math.max(0, Math.min(lines.length, stablePrefix))
@@ -881,6 +1011,8 @@ interface TranscriptBodyCache {
   spinnerFrame: number
   toolsExpanded: boolean
   expandedTools: string
+  /** Query/focus/match signature; search painting must invalidate the cache. */
+  searchKey: string
   lines: readonly string[]
   blockStarts: readonly number[]
 }
@@ -950,6 +1082,10 @@ function renderTranscriptBody(
   const animatedSpinnerFrame = state.blocks.some(block => block.kind === 'tool' && block.status === 'running')
     ? spinnerFrame
     : -1
+  const search = options.transcriptSearch
+  const searchKey = search === undefined
+    ? ''
+    : `${search.query}\u0000${search.focus}\u0000${search.matches.join(',')}`
   const cached = transcriptBodyCache.get(state.blocks)
   if (cached !== undefined
     && cached.width === options.width
@@ -958,14 +1094,17 @@ function renderTranscriptBody(
     && cached.themeName === themeName
     && cached.spinnerFrame === animatedSpinnerFrame
     && cached.toolsExpanded === toolsExpanded
-    && cached.expandedTools === expandedTools) {
+    && cached.expandedTools === expandedTools
+    && cached.searchKey === searchKey) {
     return { lines: cached.lines, blockStarts: cached.blockStarts }
   }
 
+  const matches = new Set(search?.matches ?? [])
   const lines: string[] = []
   const blockStarts: number[] = []
   let previous: Block | undefined
-  for (const block of state.blocks) {
+  for (let index = 0; index < state.blocks.length; index += 1) {
+    const block = state.blocks[index]!
     if (lines.length > 0) {
       const previousCommand = commandSurfaceName(previous)
       const currentCommand = commandSurfaceName(block)
@@ -977,7 +1116,10 @@ function renderTranscriptBody(
     }
     blockStarts.push(lines.length)
     const expanded = toolsExpanded || (block.kind === 'tool' && options.expandedTools?.has(block.callId) === true)
-    lines.push(...cachedBlockLines(block, options, theme, themeName, trueColor, spinnerFrame, expanded))
+    const rendered = cachedBlockLines(block, options, theme, themeName, trueColor, spinnerFrame, expanded)
+    lines.push(...(search !== undefined && matches.has(index)
+      ? rendered.map(line => blockMatchesQuery(stripAnsi(line), search.query) ? theme.inverse(line) : line)
+      : rendered))
     previous = block
   }
   transcriptBodyCache.set(state.blocks, {
@@ -988,6 +1130,7 @@ function renderTranscriptBody(
     spinnerFrame: animatedSpinnerFrame,
     toolsExpanded,
     expandedTools,
+    searchKey,
     lines,
     blockStarts,
   })
@@ -1456,14 +1599,21 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
       ? renderWorking(theme, Math.max(0, spinnerFrame), 'Compacting', width, motion)
       : []
   const statusBar = resolveStatusBarConfig(options.statusBar, options.statusPreset)
-  const inlineHint = options.inspected === undefined
-    ? slashInlineHint(options.input, options.inputCursor, options.commands)
-    : options.inspected.writable
-      ? slashInlineHint(options.input, options.inputCursor, options.commands) ?? 'Enter to steer · Esc to return'
-      : 'Read-only · Esc to return'
+  const inlineHint = options.transcriptSearch !== undefined
+    ? transcriptSearchHint({
+      query: options.transcriptSearch.query,
+      editing: options.transcriptSearch.editing,
+      focus: options.transcriptSearch.focus,
+    }, options.transcriptSearch.matches.length)
+    : options.inspected === undefined
+      ? slashInlineHint(options.input, options.inputCursor, options.commands)
+      : options.inspected.writable
+        ? slashInlineHint(options.input, options.inputCursor, options.commands) ?? 'Enter to steer · Esc to return'
+        : 'Read-only · Esc to return'
   const statusFooter = renderStatusFooter({
     model: options.model,
     ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+    ...(options.sessionTitle === undefined || options.sessionTitle === '' ? {} : { sessionTitle: options.sessionTitle }),
     ...(options.sessionControls === undefined ? {} : { controls: options.sessionControls }),
     ...(options.loopStatus === undefined ? {} : { loop: options.loopStatus }),
     ...(pwd === '' ? {} : { pwd }),
@@ -1522,6 +1672,9 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
     ? []
     : renderQueuedSubmissions(options.queuedSubmissions ?? [], theme, width, state.nextTurnInbox)
   const todos = editor === undefined || options.inspected !== undefined ? [] : renderTodos(state.todos, theme, width)
+  const goal = editor === undefined || options.inspected !== undefined || options.sessionControls?.goal === undefined
+    ? []
+    : renderGoalBar(options.sessionControls.goal, theme, width)
   const inspect = editor === undefined ? [] : renderInspectBanner(options.inspected, theme, width, spinnerFrame)
   const subagents = editor === undefined
     ? []
@@ -1533,7 +1686,7 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
   const inputLines = promptSelector?.lines ?? settings?.lines ?? copySelector?.lines ?? search?.lines
     ?? (editor === undefined ? [] : editor.lines)
   const spacer = 1
-  const reserved = inputLines.length + working.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + spacer + autocomplete.length + statusFooter.length
+  const reserved = inputLines.length + working.length + inspect.length + subagents.length + todos.length + goal.length + queuedSubmissions.length + spacer + autocomplete.length + statusFooter.length
   const budget = Math.max(0, height - reserved)
   const focusStart = options.focusBlock === undefined
     ? undefined
@@ -1550,11 +1703,12 @@ export function renderView(state: TranscriptState, options: ViewOptions): Frame 
 
   const lines: string[] = [...visible]
   if (visible.length > 0) lines.push('')
-  const bottomRows = working.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + inputLines.length + autocomplete.length + statusFooter.length
-  const livePinned = state.blocks.some(isBlockPending) || bottomRows > height
+  const bottomRows = working.length + goal.length + inspect.length + subagents.length + todos.length + queuedSubmissions.length + inputLines.length + autocomplete.length + statusFooter.length
+  const livePinned = state.blocks.some(block => block.kind === 'tool' && block.status === 'running')
   const fill = Math.max(0, height - lines.length - bottomRows)
   lines.push(...Array.from({ length: fill }, () => ''))
   lines.push(...working)
+  lines.push(...goal)
   lines.push(...inspect)
   lines.push(...subagents)
   lines.push(...todos)

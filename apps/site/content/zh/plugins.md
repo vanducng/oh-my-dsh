@@ -6,7 +6,7 @@ description: 使用 omdsh plugin、Profile 层和 dsh.bundle.patch 约定，为 
 
 omdsh 通过 DeepSeek Harness 插件扩展，这些插件与产品自带的 composition 挂在同一棵 Cordis 树上。用户安装的能力是一个声明了 `dsh.bundle.patch` 的 npm 软件包，它加入 omdsh 的 Profile 层列表，并随其余插件一同启动。
 
-启动会把随包发布的 [`apps/omdsh/config/cordis.yml`](https://github.com/vanducng/oh-my-dsh/blob/main/apps/omdsh/config/cordis.yml) 当作 `@vanducng/oh-my-dsh` 产品 bundle，再叠加 `$OMDSH_HOME/profiles/omdsh` 里的用户 bundle、Profile 的 `cordis.patch.yml`、`$OMDSH_HOME/cordis.patch.yml`、MCP 的 insert patch，以及本 fork 的 `$OMDSH_HOME/omdsh/plugins.yml` 与 `$OMDSH_HOME/omdsh/cordis.patch.yml`。`omdsh plugin add` 和 `omdsh plugin remove` 负责安装这些用户 bundle。`omdsh --dump-config` 会打印组合后的树。
+启动会把随包发布的 [`apps/omdsh/config/cordis.yml`](https://github.com/vanducng/oh-my-dsh/blob/main/apps/omdsh/config/cordis.yml) 当作 `@vanducng/oh-my-dsh` 产品 bundle，再叠加 `$OMDSH_HOME/profiles/omdsh` 里的用户 bundle、Profile 的 `cordis.patch.yml`、`$OMDSH_HOME/cordis.patch.yml`、MCP 的 insert patch、LSP 的 insert patch，以及本 fork 的 `$OMDSH_HOME/omdsh/plugins.yml` 与 `$OMDSH_HOME/omdsh/cordis.patch.yml`。`omdsh plugin add` 和 `omdsh plugin remove` 负责安装这些用户 bundle。`omdsh --dump-config` 会打印组合后的树。
 
 Skills 与 MCP 仍是独立的部署面，见 [Skills 与 MCP](skills-and-mcp.md)。TUI 的丰富度来自安装层之上的 Cordis 贡献服务，而不是某个 TypeScript extensions 目录。主题、Overlay 和按键注册表在出现第二个拥有独立所有权的贡献者之前保持关闭，见 [架构](architecture.md) 和 [TUI 贡献层](#tui-贡献层)。
 
@@ -100,7 +100,7 @@ Pi 的大多数插件是反应型，不是呈现型。它们属于 Harness 的�
 
 产品的 Agent 语言设置通过 system-prompt section registry 投影。声明为 `complete: true` 的自定义 persona 会按设计抑制普通 section；若希望响应 Language，必须在自己的 persona 文本末尾追加 `{{omdsh_agent_behavior}}`。`Auto` 时该变量解析为空字符串；省略变量不会报错，但 Language 对该 complete persona 不生效。
 
-`@vanducng/dsh-tui` 导出贡献 token、对应的 TypeScript 类型，以及一小套展示原语（按显示宽度处理的文本、主题颜色名、卡片分区形状）。没有这些原语，插件卡片一定会撑破布局。它不导出 renderer、editor 或 TTY 所有者。注册表永远不能变成第二条输入路径：`readInput` 保持单消费者，`onInterrupt` / `onQueueEdit` / `onRewind` / `onInspect*` 保持宿主私有。插件向人提问只走 `prompt()`。
+等到 `ctx.tui.contributions` 发布后，`@vanducng/dsh-tui` 将导出贡献 token、对应的 TypeScript 类型，以及一小套展示原语（按显示宽度处理的文本、主题颜色名、卡片分区形状）；没有这些原语，插件卡片一定会撑破布局。以上目前都还没有导出——该包当前只发布 `definition.ts` 与 provider 入口，宽度与主题相关的辅助函数仍是私有实现模块。它不导出 renderer、editor 或 TTY 所有者。注册表永远不能变成第二条输入路径：`readInput` 保持单消费者，`onInterrupt` / `onQueueEdit` / `onRewind` / `onInspect*` 保持宿主私有。插件向人提问只走 `prompt()`。
 
 Pi 第一批里的大部分丰富度已经是 Harness 缝：命令、工具、审批、提问、notice、Session Event 和 Agent preset，bundle 一挂上就能用。挂上一个真实用户 bundle 之后：
 

@@ -3,7 +3,7 @@
  * human prompt, surfaces the failed turn's error notice (fake API key —
  * keyless by construction), and exits 0 on stdin EOF.
  */
-import { spawnSync } from 'node:child_process'
+import { spawnPnpm } from './test-support/pnpm.ts'
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { readColdSessionLog } from '@deepseek-ai/dsh-session-query'
 import { describe, expect, it } from 'vitest'
 
 const root = fileURLToPath(new URL('../../..', import.meta.url))
@@ -31,8 +32,7 @@ function findSessionIds(home: string): string[] {
 describe('omdsh smoke', () => {
   it('boots, renders a prompt, reports the turn failure, exits on EOF', () => {
     const omdshHome = mkdtempSync(join(tmpdir(), 'omdsh-app-smoke-'))
-    const result = spawnSync(
-      'pnpm',
+    const result = spawnPnpm(
       ['omdsh'],
       {
         cwd: root,
@@ -54,7 +54,7 @@ describe('omdsh smoke', () => {
   it('creates a session that stock DSH persistence can load', async () => {
     const omdshHome = mkdtempSync(join(tmpdir(), 'omdsh-resume-tools-'))
     const env = { ...process.env, OMDSH_HOME: omdshHome, DEEPSEEK_API_KEY: 'sk-invalid-key-for-smoke' }
-    const created = spawnSync('pnpm', ['omdsh'], {
+    const created = spawnPnpm(['omdsh'], {
       cwd: root,
       input: 'hi\n',
       encoding: 'utf8',
@@ -70,7 +70,7 @@ describe('omdsh smoke', () => {
       try {
         await reader.plugin(SessionStore)
         await reader.plugin(JsonlSessionPersistence, { root: join(omdshHome, 'sessions') })
-        stockEvents = (await reader.sessionPersistence.load(SessionId(sessionId))).events
+        stockEvents = (await readColdSessionLog(reader.sessionPersistence, SessionId(sessionId))).events
       } catch (error: unknown) {
         stockLoadError = error
       } finally {
@@ -79,7 +79,7 @@ describe('omdsh smoke', () => {
     }
     const resumed = sessionId === undefined
       ? undefined
-      : spawnSync('pnpm', ['omdsh', '--resume', sessionId], {
+      : spawnPnpm(['omdsh', '--resume', sessionId], {
         cwd: root,
         input: '',
         encoding: 'utf8',
@@ -105,8 +105,7 @@ describe('omdsh smoke', () => {
   it('routes --resume through the durable session controller', () => {
     const omdshHome = mkdtempSync(join(tmpdir(), 'omdsh-resume-smoke-'))
     const missing = 'session-does-not-exist'
-    const result = spawnSync(
-      'pnpm',
+    const result = spawnPnpm(
       ['omdsh', '--resume', missing],
       {
         cwd: root,
@@ -126,8 +125,7 @@ describe('omdsh smoke', () => {
 
   it('mounts the interactive permission selector in the active agent scope', () => {
     const omdshHome = mkdtempSync(join(tmpdir(), 'omdsh-permission-smoke-'))
-    const result = spawnSync(
-      'pnpm',
+    const result = spawnPnpm(
       ['omdsh'],
       {
         cwd: root,

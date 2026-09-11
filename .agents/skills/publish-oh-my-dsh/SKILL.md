@@ -98,3 +98,13 @@ git status --short --branch
 ```
 
 Report the version, npm results, tag, GitHub Release URL, and any deferred human step. At the first-publish checkpoint, report the exact commands and stop.
+
+### Registry reads can lag a successful publish
+
+A publish of `@vanducng/dsh-tui` can succeed while every read endpoint still serves the previous version. Observed upstream on 0.15.0: `npm view`, the registry document, and `npm view '@scope/dsh-tui@^X.Y.Z'` answered `E404` for minutes after the write reported success. The registry caught up on its own.
+
+Treat the publish result as the write-side fact and a registry read as an eventually-consistent view:
+
+- A `404` or a stale `latest` immediately after a reported publish is not evidence that the publish failed.
+- Never conclude "the package was not published" from reads alone, and never request a re-publish to repair a stale read.
+- For the first interactive publish, do not wait for a registry read before publishing the CLI. For later OIDC publishes, treat a mismatch during the final audit as propagation lag and record it rather than asking for another publish.
