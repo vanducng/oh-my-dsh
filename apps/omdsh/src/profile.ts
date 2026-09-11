@@ -102,6 +102,10 @@ export interface LaunchComposition {
  * Restate the agent-presets row with the shipped roster root. Profile
  * `baseUrl` would otherwise resolve `./agent-presets/` inside the Profile
  * directory, which does not carry the product presets.
+ *
+ * The rewrite must land on the original insert. A trailing `id: agent-presets`
+ * patch after a later user-bundle insert remounts `standard` and DSH 0.1.5
+ * rejects the second `deployment:persona-prefix` registration.
  */
 export function agentPresetsOverlay(layerPatches: readonly PatchOptions[][]): PatchOptions | undefined {
   const row = composeEntries([...layerPatches]).find(entry => entry.id === 'agent-presets')
@@ -110,9 +114,33 @@ export function agentPresetsOverlay(layerPatches: readonly PatchOptions[][]): Pa
     id: 'agent-presets',
     config: {
       ...((row.config ?? {}) as Record<string, unknown>),
+      includeShippedRoot: false,
       roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
     },
   }
+}
+
+function insertRows(patch: PatchOptions): Array<Record<string, unknown>> | undefined {
+  if (typeof patch !== 'object' || patch === null || !('insert' in patch)) return undefined
+  const rows = (patch as { insert?: unknown }).insert
+  return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : undefined
+}
+
+/** Fold the shipped-root rewrite into the product insert so Loader mounts it once. */
+export function applyAgentPresetsOverlay(layers: ConfigDumpLayer[]): void {
+  const overlay = agentPresetsOverlay(layers.map(layer => layer.patches))
+  if (overlay === undefined) return
+  for (const layer of layers) {
+    for (const patch of layer.patches) {
+      const rows = insertRows(patch)
+      if (rows === undefined) continue
+      const row = rows.find(entry => entry.id === 'agent-presets')
+      if (row === undefined) continue
+      row.config = overlay.config
+      return
+    }
+  }
+  layers.push({ label: 'agent-presets', patches: [overlay] })
 }
 
 /**
@@ -170,8 +198,7 @@ export function composeLaunch(
     const userPatches = loadUserPatches(environment)
     if (userPatches.length > 0) layers.push({ label: 'omdsh/cordis.patch.yml', patches: userPatches })
   }
-  const overlay = agentPresetsOverlay(layers.map(layer => layer.patches))
-  if (overlay !== undefined) layers.push({ label: 'agent-presets', patches: [overlay] })
+  applyAgentPresetsOverlay(layers)
   return {
     profile,
     rootConfig: join(profile.dir, PROFILE_ROOT_FILENAME),
