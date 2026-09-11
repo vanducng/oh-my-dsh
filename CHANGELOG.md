@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog], and this project adheres to [Semantic Versioning].
 
+## [0.12.0](https://github.com/vanducng/oh-my-dsh/compare/v0.11.0...v0.12.0) (2026-09-11)
+
+
+### Features
+
+* sync upstream DSH 0.1.2-rc.1 product work without the 0.14.0 bump ([#29](https://github.com/vanducng/oh-my-dsh/issues/29)) ([5733ef9](https://github.com/vanducng/oh-my-dsh/commit/5733ef9316c7912884d78624d4a59e69d06edc95))
+
 ## [0.11.0](https://github.com/vanducng/oh-my-dsh/compare/v0.10.0...v0.11.0) (2026-09-03)
 
 
