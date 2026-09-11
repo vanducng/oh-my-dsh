@@ -21,7 +21,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "benchmark:tui": "tsx scripts/benchmark-tui.mts",
-    "test": "node --test scripts/format-markdown.spec.mjs scripts/tui-grid.spec.mjs && pnpm -r test",
+    "test": "node --test scripts/format-markdown.spec.mjs scripts/packed-install-overrides.spec.mjs scripts/tui-grid.spec.mjs && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "format:md": "node scripts/format-markdown.mjs && node scripts/sync-package-readme.mjs",
     "check:md": "node scripts/format-markdown.mjs --check && node scripts/sync-package-readme.mjs --check",

@@ -12,6 +12,7 @@ import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import { dumpOmdshConfig } from './composition.ts'
 import { runPlugin } from './plugin.ts'
 import { PRODUCT_BUNDLE, PROFILE_NAME } from './profile.ts'
+import { packedInstallOverrides } from '../../../scripts/packed-install-overrides.mjs'
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url))
 const exampleDir = join(repoRoot, 'examples', 'hello')
@@ -135,6 +136,15 @@ describe('examples/hello bundle', () => {
     const home = temp('omdsh-hello-packed-home-')
     const tuiArchive = packedArchive(tuiDir, packDir)
     const appArchive = packedArchive(appDir, packDir)
+    const tuiManifest = JSON.parse(readFileSync(join(tuiDir, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    // npm latest can hoist `^0.1.5-rc.1` peers to 0.1.5-rc.2 beside the nested
+    // cohort. Dual dsh-scope copies make a preset persona register on the host.
+    writeFileSync(join(installDir, 'package.json'), JSON.stringify({
+      private: true,
+      overrides: packedInstallOverrides(appManifest, tuiManifest),
+    }))
     // A cold Windows runner installs the packed dependency tree well past the
     // POSIX budget, so this step gets its own generous bound.
     const installed = spawnTool('npm', ['install', '--no-audit', '--no-fund', '--prefix', installDir, appArchive, tuiArchive], {
