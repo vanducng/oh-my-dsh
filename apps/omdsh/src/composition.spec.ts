@@ -47,7 +47,6 @@ describe('boot patch assembly', () => {
       PRODUCT_BUNDLE,
       PROFILE_PATCH_LABEL,
       'mcp.json',
-      'agent-presets',
     ])
     expect(loadBootPatches(cwd, { OMDSH_HOME: home })).toEqual(expect.arrayContaining([
       expect.objectContaining({ insert: expect.arrayContaining([expect.objectContaining({ id: 'tui' })]) }),
@@ -101,7 +100,6 @@ describe('boot patch assembly', () => {
       PROFILE_PATCH_LABEL,
       'mcp.json',
       'lsp.json',
-      'agent-presets',
     ])
     const lsp = loadBootPatches(cwd, { OMDSH_HOME: home })
       .flatMap(patch => (patch as { insert?: { id?: string }[] }).insert ?? [])
@@ -121,7 +119,6 @@ describe('boot patch assembly', () => {
       PROFILE_PATCH_LABEL,
       'cordis.patch.yml',
       'mcp.json',
-      'agent-presets',
     ])
     const patches = loadBootPatches(cwd, { OMDSH_HOME: home })
     const homeIndex = patches.findIndex(patch => !('insert' in patch) && (patch as { id?: string }).id === 'tui')
@@ -142,14 +139,17 @@ describe('boot patch assembly', () => {
     writeFileSync(join(cwd, '.dsh', 'mcp.json'), JSON.stringify({
       mcpServers: { memory: { command: 'memory-server' } },
     }))
-    expect(composeLaunch(cwd, { OMDSH_HOME: home }).layers.map(layer => layer.label)).toEqual([
+    const composed = composeLaunch(cwd, { OMDSH_HOME: home })
+    expect(composed.layers.map(layer => layer.label)).toEqual([
       PRODUCT_BUNDLE,
       PROFILE_PATCH_LABEL,
       'mcp.json',
       'omdsh/plugins.yml',
       'omdsh/cordis.patch.yml',
-      'agent-presets',
     ])
+    expect(composed.patches.some(patch => (
+      !('insert' in patch) && (patch as { id?: string }).id === 'agent-presets'
+    ))).toBe(false)
   })
 
   it('fails loud when the home patch file is present but not a list', () => {
