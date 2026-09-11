@@ -47,6 +47,7 @@ TUI 软件包从同一个 npm 软件包公开多个 Cordis 入口，因为它们
 - 工具插件负责工具语义和与 Provider 无关的展示意图。TUI 将 `ToolDefinition.presentCall` 和 `presentResult` 映射为终端卡片，并保留通用回退展示。
 - Harness Projection 插件负责 token、上下文、耗时、标题和会话统计；状态栏只负责格式化这些输出。
 - `session-runtime` 把带 `origin: subagent` 的后代会话投影为 Composer 上方的实时名册，并可以把视口切换到其中一个孩子的 Transcript。可续写的孩子通过 subagent 宿主队列（`@deepseek-ai/dsh-subagent/internal` 的 `queueHostSubagentPrompt`）接收 Composer 的后续消息，保留用户署名与 FIFO 轮次顺序；一次性运行保持只读。子会话日志留在各自的 Session 中，不会回放到父 Transcript。
+- 三种委托 transport 并存，按次选择而非常量配置。两个进程内后端（`subagent`、`subagent_fork`）在 TUI 自己的事件循环上运行子 Agent，并支持全部由父级强制的启动能力。进程外后端（`subagent_isolated`，基于 `dsh-subagent-acp`）改为派生一整个子运行时，把重负载委托的 CPU 移出该事件循环；它不声明任何启动期能力、也不实现可续写运行，因此这样的孩子在派发后无法被 steering。
 - 人机交互适配器将审批和提问 Service 连接到终端选择器，而不把这些领域迁入终端 Provider。
 
 纯算法仍然保留为内部模块，包括 ANSI 解析、终端显示宽度、Markdown 格式化、编辑器移动、路径匹配、主题映射、帧差分、viewport 切片和 Overlay 状态转换。除非出现第二个拥有独立所有权的适配器并形成真实边界，否则不应将它们改造成运行时插件。
@@ -58,7 +59,7 @@ TUI 软件包从同一个 npm 软件包公开多个 Cordis 入口，因为它们
 - Cordis Loader 与 Timer 基础设施；
 - 官方 DeepSeek LLM Adapter、休眠挂载的 pi-ai 多提供方 Adapter、设置、凭据、默认模型、Agent preset roster、Code Runtime 和 Agent Runtime；
 - 持久化 JSONL 会话、Checkpoint、查询、文件引用与跨会话引用、标题、统计与 Token Projection；
-- 本地附件、文件系统、子进程、Bash、Sandbox 和权限 Provider；
+- 本地附件、文件系统、子进程、Sandbox 和权限 Provider，以及每台主机唯一的一套 Shell 栈（POSIX 上是 `bash`，Windows 上是 `pwsh`）及其对应的模型工具；
 - Standard、PTC、Minimal 与 Cordis 的 Agent-plane 组合，以及 Harness 命令、Compaction、Todo、Goal、Plan、审批、提问和 Subagent；
 - 文件系统 Skill 发现以及项目级和用户级 MCP Server Adapter；
 - 本地 TUI Provider、工具展示适配桥、Session Runtime、人机交互适配器、命令贡献插件、启动提示和 Runner。
@@ -83,9 +84,9 @@ Skills 与 MCP 的部署细节见 [`skills-and-mcp.md`](skills-and-mcp.md)。`om
 
 - 布局以终端显示单元格为准，正确处理 ANSI 序列、CJK 文本、emoji、组合字符和不可断行的长内容。
 - Composer 和两行状态 Footer 固定在底部，Transcript Viewport 可以独立滚动。
-- `MainScreenRenderer` 在普通更新期间将终端原生 scrollback 作为追加式冻结视觉记录。在终端尺寸稳定时，已最终化的行会在离开实时屏幕前以最终内容重写。仅追加的 assistant reasoning 和 text 不固定在 viewport，其滚出屏幕的头部会进入原生历史，让 viewport 自然跟随实时尾部；可变的 running-tool preview 则固定到完成为止。生产启动会等待初始 session projection，不再先绘制临时 Header。idle session replacement 会完整重放逻辑帧；running replacement 只重放已稳定前缀，并仅固定可变 preview 区域。direct terminal 可在权威替换时使用 `ED3`，并为临时全屏界面借用 alternate screen。multiplexer 与 ConPTY 会保留宿主 scrollback，multiplexer 的 resize 突发会先合并再重新锚定。Renderer 不启用 1000/1006 鼠标跟踪，并将每帧包在一次 DEC 2026 同步写入中。
+- `MainScreenRenderer` 在普通更新期间将终端原生 scrollback 作为追加式冻结视觉记录。在终端尺寸稳定时，已最终化的行会在离开实时屏幕前以最终内容重写。仅追加的 assistant reasoning 和 text 不固定在 viewport，其滚出屏幕的头部会进入原生历史，让 viewport 自然跟随实时尾部；可变的 running-tool preview 则固定到完成为止。生产启动会等待初始 session projection，不再先绘制临时 Header。idle session replacement 会完整重放逻辑帧；running replacement 重放已稳定前缀，从缓冲的 `agent/assistant-stream` 帧重建当前活跃尝试，并仅固定其可变 preview 区域。direct terminal 可在权威替换时使用 `ED3`，并为临时全屏界面借用 alternate screen。multiplexer 与 ConPTY 会保留宿主 scrollback，multiplexer 的 resize 突发会先合并再重新锚定。Renderer 不启用 1000/1006 鼠标跟踪，并将每帧包在一次 DEC 2026 同步写入中。
 - 已完成的 Transcript 布局会被缓存，Renderer 只输出发生变化的行，而不重绘整个屏幕。
-- Modal Selector 在交互结束前独占输入和光标可见性，结束后恢复 Composer。
+- Modal Selector 在交互结束前独占输入和光标可见性，结束后恢复 Composer；Prompt 会暂时移开并恢复它所打断的全屏 Overlay，任何确认都不可能在被遮挡的旧屏幕背后被接受。
 - 第一次 Ctrl-C 清空输入或中断任务，第二次 Ctrl-C 退出。Ctrl-D 直接退出；存在持久会话时会输出 `omdsh --resume <session-id>` 提示。
 - Pipe 模式使用相同的命令与会话语义，但不接管交互式屏幕。
 

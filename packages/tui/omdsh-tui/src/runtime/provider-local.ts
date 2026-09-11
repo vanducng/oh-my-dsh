@@ -18,8 +18,9 @@ import {
 } from './terminal-notifications.ts'
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { createInterface, type Interface } from 'node:readline'
+import { StringDecoder } from 'node:string_decoder'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
@@ -91,6 +92,8 @@ import {
   appendTrajectoryEvent,
   applyTrajectoryEvent,
   createTrajectory,
+  trajectoryDetailMetrics,
+  trajectoryListMetrics,
   type TrajectoryState,
 } from '../views/trajectory.ts'
 import {
@@ -101,15 +104,24 @@ import {
 } from '../views/agent-hub.ts'
 import {
   applyEvent,
+  applyStreamChunk,
   blockLines,
+  blockSearchText,
   initialTranscript,
   replayEvents,
   renderView,
   settleIdleTranscript,
   TRANSCRIPT_FAST_SCROLL,
   type Block,
+  type StreamDelta,
   type TranscriptState,
 } from '../views/event-views.ts'
+import {
+  applyTranscriptSearchEvent,
+  createTranscriptSearch,
+  searchBlockIndexes,
+  type TranscriptSearchState,
+} from '../views/transcript-search.ts'
 import {
   nextRevealStep,
   revealStreamingAssistant,
@@ -136,7 +148,7 @@ import {
   togglePromptSelection,
   type PromptSelectorState,
 } from '../views/prompt-selector.ts'
-import { resolveProjectContext } from '../session/project-context.ts'
+import { refreshProjectContext, resolveProjectContext } from '../session/project-context.ts'
 import { pickWelcomeTips, type WelcomeTip } from '../chrome/welcome-tips.ts'
 import { formatEssentialHotkeysText, formatHotkeysText, hotkeyCount } from '../views/hotkeys.ts'
 import {
@@ -162,8 +174,23 @@ const TERMINAL_PROGRESS_KEEPALIVE_MS = 1_000
 function shortenPath(cwd: string): string {
   const home = homedir()
   if (cwd === home) return '~'
-  if (cwd.startsWith(home + '/')) return '~' + cwd.slice(home.length)
+  // Windows separates with `\`, so the home prefix check follows the host.
+  if (cwd.startsWith(home + sep)) return '~' + cwd.slice(home.length)
   return cwd
+}
+
+/** Maximum code points written into the OSC 2 window title. */
+const WINDOW_TITLE_MAX = 120
+
+/**
+ * Make a session title safe for an OSC 2 write: control characters are
+ * replaced so a title cannot terminate or inject the escape sequence, and the
+ * payload is bounded without splitting a surrogate pair.
+ */
+function windowTitleText(title: string | undefined): string {
+  if (title === undefined) return ''
+  const cleaned = title.replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ').replace(/\s+/gu, ' ').trim()
+  return [...cleaned].slice(0, WINDOW_TITLE_MAX).join('')
 }
 
 export const name = 'omdsh-tui'
@@ -198,11 +225,24 @@ export interface TerminalLike {
   onResize?(listener: () => void): () => void
 }
 
-type PendingRead = { resolve: (submission: TuiSubmission | null) => void }
+type PendingRead = {
+  resolve: (submission: TuiSubmission | null) => void
+  signal?: AbortSignal | null
+  /** Detaches this read's abort listener once the read settles. */
+  offAbort?: () => void
+}
 type PendingPrompt = PromptSelectorState & {
   resolve: (answer: string | null) => void
   offAbort?: () => void
 }
+
+/** One overlay surface displaced by an in-flight human prompt. */
+type DisplacedSurface =
+  | { kind: 'trajectory'; state: TrajectoryState }
+  | { kind: 'agentHub'; state: AgentHubState }
+  | { kind: 'settings'; state: SettingsState }
+  | { kind: 'copySelector'; state: CopySelectorState }
+  | { kind: 'search'; state: HistorySearchState }
 /**
  * Local terminal presentation service.
  */
@@ -234,6 +274,7 @@ export class LocalTui implements TuiService {
   #draft = ''
   #ac: { items: AutocompleteItem[]; selected: number; prefix: string } | null = null
   #search: HistorySearchState | null = null
+  #transcriptSearch: TranscriptSearchState | null = null
   #settings: SettingsState | null = null
   #copySelector: CopySelectorState | null = null
   #trajectory: TrajectoryState | null = null
@@ -300,9 +341,19 @@ export class LocalTui implements TuiService {
   #tools: ToolInfo[] = []
   #runtimeCommands: TuiCommand[] = []
   #prompt: PendingPrompt | null = null
+  /**
+   * The overlay surface displaced by an in-flight prompt: while a human
+   * prompt owns the keyboard, its screen must not compete with a stale
+   * trajectory/hub surface that accepts invisible confirmations. Restored
+   * when the prompt settles.
+   */
+  #promptDisplaced: DisplacedSurface | null = null
   #recentSessions: TuiRecentSession[] = []
   readonly #welcomeTips: readonly WelcomeTip[]
   #sessionId: string | undefined
+  #sessionTitle: string | undefined
+  #writtenWindowTitle: string | undefined
+  #pendingWindowTitle: string | undefined
   #sessionStats: TuiSessionStats | undefined
   #sessionControls: TuiSessionControls | undefined
   #loopStatus: TuiLoopStatus | undefined
@@ -405,11 +456,16 @@ export class LocalTui implements TuiService {
     this.#pwd = shortenPath(project.root)
     this.#branch = project.gitLabel
     this.#renderer = new MainScreenRenderer(
-      { write: (chunk) => { this.#term.output.write(chunk) } },
+      { write: (chunk) => {
+        const prefix = this.#pendingWindowTitle
+        this.#pendingWindowTitle = undefined
+        this.#term.output.write(prefix === undefined ? chunk : prefix + chunk)
+      } },
       {
         width: this.#term.width(),
         height: this.#term.height(),
         synchronized: this.#tty,
+        clearScrollback: this.#terminalProfile === 'direct',
         alternateScreenOverlays: paths.alternateScreenOverlays === true,
         alternateScreenMutable: true,
         preserveInitialScreen: paths.preserveInitialScreen === true,
@@ -446,6 +502,14 @@ export class LocalTui implements TuiService {
     this.#render()
   }
 
+  /** Refresh Git workspace metadata after a turn; the footer shows realtime branch/dirty state. */
+  #refreshProjectContext(): void {
+    const branch = refreshProjectContext(this.#cwd).gitLabel
+    if (branch === this.#branch) return
+    this.#branch = branch
+    if (this.#tty) this.#render()
+  }
+
   event(event: SessionEvent, presentation?: TuiToolPresentation): void {
     this.#state = applyEvent(this.#state, event, presentation)
     this.#emitNotification(this.#notifications.event({
@@ -454,18 +518,33 @@ export class LocalTui implements TuiService {
       ...(event.type === 'turn/end' ? { reason: event.data.reason.kind } : {}),
     }))
     if (this.#trajectory !== null) this.#trajectory = appendTrajectoryEvent(this.#trajectory, event)
-    const smoothStream = this.#syncStreamingReveal(event)
+    if (event.type === 'turn/end') this.#refreshProjectContext()
+    this.#syncStreamingReveal(undefined)
+    this.#syncTick()
+    if (this.#tty) {
+      this.#render()
+    } else if (event.type === 'user/message' || event.type === 'assistant/message' || event.type === 'tool/result' || event.type === 'turn/end') {
+      this.#printPlain()
+    }
+  }
+
+  /**
+   * Fold one live `agent/assistant-stream` chunk into the transcript and
+   * schedule the streaming reveal. Durable settlement follows on the session
+   * log as `assistant/message` or `assistant/attempt`.
+   */
+  streamDelta(delta: StreamDelta): void {
+    this.#state = applyStreamChunk(this.#state, delta)
+    const smoothStream = this.#syncStreamingReveal(delta)
     this.#syncTick()
     if (this.#tty) {
       if (smoothStream) {
         // The 30 fps reveal clock owns presentation for textual deltas.
-      } else if (event.type === 'assistant/chunk' && this.#streamRenderMs > 0) {
+      } else if (this.#streamRenderMs > 0) {
         this.#scheduleStreamRender()
       } else {
         this.#render()
       }
-    } else if (event.type === 'user/message' || event.type === 'assistant/message' || event.type === 'tool/result' || event.type === 'turn/end') {
-      this.#printPlain()
     }
   }
 
@@ -540,9 +619,9 @@ export class LocalTui implements TuiService {
 
   openTrajectory(events: readonly SessionEvent[]): boolean {
     if (!this.#tty) return false
+    this.#finishPrompt(null)
     this.#trajectory = createTrajectory(events)
     this.#agentHub = null
-    this.#prompt = null
     this.#settings = null
     this.#copySelector = null
     this.#search = null
@@ -591,6 +670,7 @@ export class LocalTui implements TuiService {
     this.#emitNotification(this.#notifications.humanPrompt())
     this.#editor.setText('')
     this.#ac = null
+    const displaced = this.#displaceSurface()
     return new Promise((resolve) => {
       const selected = Math.max(0, request.options?.findIndex(option =>
         (option.value ?? option.label) === request.initialValue) ?? 0)
@@ -601,6 +681,7 @@ export class LocalTui implements TuiService {
         pending.offAbort = () => { request.signal?.removeEventListener('abort', onAbort) }
       }
       this.#prompt = pending
+      this.#promptDisplaced = displaced
       if (this.#tty) {
         this.#render()
       } else {
@@ -640,11 +721,14 @@ export class LocalTui implements TuiService {
 
   setSession(info: {
     id: string
+    title?: string
     recent: readonly TuiRecentSession[]
     stats?: TuiSessionStats
     controls?: TuiSessionControls
   }): void {
     this.#sessionId = info.id
+    const title = info.title?.trim()
+    this.#sessionTitle = title === undefined || title === '' ? undefined : title
     this.#recentSessions = info.recent.map((session) => ({ ...session }))
     this.#sessionStats = info.stats === undefined ? undefined : { ...info.stats }
     this.#sessionControls = info.controls === undefined
@@ -654,9 +738,29 @@ export class LocalTui implements TuiService {
           ...(info.controls.plan === undefined ? {} : { plan: { ...info.controls.plan } }),
         }
     if (!this.#tty) return
+    this.#syncWindowTitle()
     if (this.#reveal !== undefined && this.#motion !== 'off') return
     if (this.#streamRenderMs > 0 && this.#busy()) this.#scheduleStreamRender()
     else this.#render()
+  }
+
+  /**
+   * Mirror the folded session title into the terminal's own window/tab title.
+   * Control characters are stripped so a title can never inject an escape
+   * sequence, and the payload is bounded to keep tab strips readable.
+   */
+  #syncWindowTitle(): void {
+    if (this.#deferInitialRender) return
+    const title = windowTitleText(this.#sessionTitle)
+    if (title === this.#writtenWindowTitle) return
+    this.#writtenWindowTitle = title
+    this.#pendingWindowTitle = `\x1b]2;${title}\x07`
+  }
+
+  #flushPendingWindowTitle(): void {
+    if (this.#pendingWindowTitle === undefined) return
+    this.#term.output.write(this.#pendingWindowTitle)
+    this.#pendingWindowTitle = undefined
   }
 
   /** Apply prefs loaded from the settings document (does not persist). */
@@ -711,16 +815,16 @@ export class LocalTui implements TuiService {
     }
   }
 
-  readInput(): Promise<TuiSubmission | null> {
+  readInput(signal?: AbortSignal): Promise<TuiSubmission | null> {
     if (this.#pending !== null) return Promise.reject(new Error('omdsh-tui: input read already in flight'))
-    if (this.#disposed) return Promise.resolve(null)
+    if (this.#disposed || signal?.aborted === true) return Promise.resolve(null)
     // A Ctrl-D pressed while the previous turn was still settling lands here
     // (no pending readline existed to resolve); honor it now.
     if (this.#quitRequested) {
       this.#quitRequested = false
       return Promise.resolve(null)
     }
-    if (!this.#tty) return this.#readlinePlain()
+    if (!this.#tty) return this.#readlinePlain(signal)
     // Lines submitted while a turn was still running were queued instead of
     // dropped; serve the oldest before waiting for fresh input.
     const queued = this.#queuedSubmissions.shift()
@@ -729,7 +833,17 @@ export class LocalTui implements TuiService {
       return Promise.resolve(queued)
     }
     return new Promise((resolve) => {
-      this.#pending = { resolve }
+      const pending: PendingRead = { resolve, signal: signal ?? null }
+      this.#pending = pending
+      if (signal !== undefined) {
+        const onAbort = (): void => {
+          if (this.#pending !== pending) return
+          this.#pending = null
+          resolve(null)
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        pending.offAbort = () => { signal.removeEventListener('abort', onAbort) }
+      }
     })
   }
 
@@ -846,7 +960,12 @@ export class LocalTui implements TuiService {
       // Leave the cursor on a fresh line below the last frame so the shell
       // prompt does not overwrite the transcript. Disable bracketed paste
       // and restore the cursor.
+      if (this.#writtenWindowTitle !== undefined && this.#writtenWindowTitle !== '') {
+        this.#term.output.write('\x1b]2;\x07')
+        this.#writtenWindowTitle = undefined
+      }
       this.#releaseTerminalOwnership()
+      this.#term.output.write('\r\n')
       if (this.#resumeHintRequested && this.#sessionId !== undefined) {
         this.#term.output.write(`\r\nResume this session with ${APP_NAME} --resume ${this.#sessionId}\r\n`)
       }
@@ -862,9 +981,17 @@ export class LocalTui implements TuiService {
     this.#lineReader?.close()
     this.#offAgentBehaviorWatch?.()
     this.#offAgentBehaviorWatch = undefined
-    this.#pending?.resolve(null)
-    this.#pending = null
+    this.#settlePending(null)
     this.#finishPrompt(null)
+  }
+
+  /** Settle one pending read, detaching its abort listener. */
+  #settlePending(submission: TuiSubmission | null): void {
+    const pending = this.#pending
+    if (pending === null) return
+    pending.offAbort?.()
+    this.#pending = null
+    pending.resolve(submission)
   }
 
   /** Re-render the current frame (resize reflow). */
@@ -872,7 +999,7 @@ export class LocalTui implements TuiService {
     this.#render()
   }
 
-  #readlinePlain(): Promise<TuiSubmission | null> {
+  #readlinePlain(signal?: AbortSignal): Promise<TuiSubmission | null> {
     return new Promise((resolve) => {
       if (this.#lineReader === null) {
         this.#lineReader = createInterface({ input: this.#term.input })
@@ -884,14 +1011,26 @@ export class LocalTui implements TuiService {
           this.#plainResolve(null)
         })
       }
-      if (this.#plainClosed) {
-        resolve(null)
-        return
+      const pending: PendingRead = { resolve, signal: signal ?? null }
+      this.#plainPending = pending
+      if (signal !== undefined) {
+        const onAbort = (): void => {
+          if (this.#plainPending !== pending) return
+          this.#plainPending = null
+          resolve(null)
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        pending.offAbort = () => { signal.removeEventListener('abort', onAbort) }
       }
-      this.#plainPending = { resolve }
+      this.#pumpPlain()
     })
   }
 
+  /**
+   * Queue one readline delivery, then drain. A single stream chunk can carry
+   * several lines; every line is buffered until the runner asks for the next
+   * read, and EOF waits for the queue before closing the reader.
+   */
   #plainResolve(line: string | null): void {
     if (this.#prompt !== null && line !== null) {
       const value = line.trim()
@@ -910,9 +1049,26 @@ export class LocalTui implements TuiService {
       return
     }
     if (this.#prompt !== null) this.#finishPrompt(null)
+    if (line !== null) this.#plainQueue.push(line)
+    this.#pumpPlain()
+  }
+
+  /** Resolve the pending plain read from the queue, or close it after EOF drained. */
+  #pumpPlain(): void {
     const pending = this.#plainPending
-    this.#plainPending = null
-    pending?.resolve(line === null ? null : { text: line, images: [] })
+    if (pending === null) return
+    const line = this.#plainQueue.shift()
+    if (line !== undefined) {
+      pending.offAbort?.()
+      this.#plainPending = null
+      pending.resolve({ text: line, images: [] })
+      return
+    }
+    if (this.#plainClosed) {
+      pending.offAbort?.()
+      this.#plainPending = null
+      pending.resolve(null)
+    }
   }
 
   /** Print plain-mode blocks that settled since the last flush. */
@@ -952,9 +1108,9 @@ export class LocalTui implements TuiService {
     }
   }
 
-  #syncStreamingReveal(event: SessionEvent): boolean {
-    const textualDelta = event.type === 'assistant/chunk'
-      && (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
+  #syncStreamingReveal(delta: StreamDelta | undefined): boolean {
+    const textualDelta = delta !== undefined
+      && (delta.chunk.type === 'text-delta' || delta.chunk.type === 'reasoning-delta')
     const key = streamingAssistantKey(this.#state)
     if (!textualDelta || this.#motion === 'off' || key === undefined) {
       this.#stopRevealTick()
@@ -1047,6 +1203,7 @@ export class LocalTui implements TuiService {
       colors: this.#colors,
       pwd: this.#pwd,
       ...(this.#branch !== undefined ? { branch: this.#branch } : {}),
+      ...(this.#sessionTitle === undefined ? {} : { sessionTitle: this.#sessionTitle }),
       version: APP_VERSION,
       appName: APP_NAME,
       spinnerFrame: this.#spinner,
@@ -1055,6 +1212,14 @@ export class LocalTui implements TuiService {
       themeName: this.#themeName,
       scrollStart: release || this.#follow ? Number.POSITIVE_INFINITY : this.#scrollStart,
       ...(!release && this.#focusBlock !== undefined ? { focusBlock: this.#focusBlock } : {}),
+      ...(!release && this.#transcriptSearch !== null ? {
+        transcriptSearch: {
+          query: this.#transcriptSearch.query,
+          matches: searchBlockIndexes(this.#state.blocks.map(blockSearchText), this.#transcriptSearch.query),
+          focus: this.#transcriptSearch.focus,
+          editing: this.#transcriptSearch.editing,
+        },
+      } : {}),
       toolsExpanded: this.#toolsExpanded,
       expandedTools: this.#expandedToolCalls,
       commands: this.#commands(),
@@ -1087,11 +1252,13 @@ export class LocalTui implements TuiService {
       this.#streamRenderTimer = null
     }
     if (this.#deferInitialRender) return
+    this.#syncWindowTitle()
     const frame = this.#tty ? this.#viewFrame() : { lines: [] }
     this.#focusBlock = undefined
     this.#promptDocument = frame.promptDocument
     this.#syncScroll(frame.transcript)
     this.#renderer.render(frame)
+    this.#flushPendingWindowTitle()
   }
 
   #scheduleStreamRender(): void {
@@ -1136,8 +1303,13 @@ export class LocalTui implements TuiService {
     this.#scrollStart = this.#maxStart
   }
 
+  readonly #utf8 = new StringDecoder('utf8')
+  readonly #plainQueue: string[] = []
   #onData(chunk: Buffer): void {
-    const { events, rest } = parseKeys(this.#pendingKeys + chunk.toString('utf8'))
+    // Decode bytes across the whole stream so a multi-byte UTF-8 character
+    // split between data events is never corrupted into replacement chars.
+    const text = this.#utf8.write(chunk)
+    const { events, rest } = parseKeys(this.#pendingKeys + text)
     this.#pendingKeys = rest
     if (this.#escapeTimer !== null) {
       clearTimeout(this.#escapeTimer)
@@ -1385,7 +1557,9 @@ export class LocalTui implements TuiService {
     }
     if (this.#handlePrompt(event)) return
     if (this.#trajectory !== null) {
-      const command = applyTrajectoryEvent(this.#trajectory, event)
+      const { pageSize } = trajectoryListMetrics(this.#trajectory, this.#term.height())
+      const { pageLines } = trajectoryDetailMetrics(this.#trajectory, this.#term.height())
+      const command = applyTrajectoryEvent(this.#trajectory, event, { pageSize, detailPageLines: pageLines })
       if ('close' in command) this.#trajectory = null
       else this.#trajectory = command.state
       this.#render()
@@ -1401,12 +1575,13 @@ export class LocalTui implements TuiService {
       this.#render()
       return
     }
+    if (this.#transcriptSearch !== null) {
+      this.#applyTranscriptSearch(event)
+      return
+    }
     if (event.type === 'key') {
-      const action = this.#keybindings[event.id]
-      if (action !== undefined) {
-        this.#runAction(action)
-        return
-      }
+      const action = this.#boundAction(event.id)
+      if (action !== undefined && this.#runAction(action)) return
     }
     if (this.#inspected !== undefined && this.#inspected.writable !== true && event.type === 'text'
       && this.#prompt === null && this.#settings === null && this.#copySelector === null && this.#search === null) {
@@ -1460,13 +1635,6 @@ export class LocalTui implements TuiService {
       this.#applyCopySelector(event)
       return
     }
-    if (event.type === 'key' && event.id === 'ctrl+r') {
-      if (this.#images.length > 0) return
-      this.#search = createHistorySearch(this.#history)
-      this.#ac = null
-      this.#render()
-      return
-    }
     if (this.#search !== null) {
       this.#applySearch(event)
       return
@@ -1504,41 +1672,6 @@ export class LocalTui implements TuiService {
     }
     if (event.type === 'key' && (event.id === 'backspace' || event.id === 'delete')
       && this.#removeImageAtCursor(event.id)) return
-    if (event.type === 'key') {
-      if (event.id === 'pageUp') {
-        this.#scrollBy(-this.#pageSize())
-        return
-      }
-      if (event.id === 'pageDown') {
-        this.#scrollBy(this.#pageSize())
-        return
-      }
-      if (event.id === 'shift+up') {
-        this.#scrollBy(-TRANSCRIPT_FAST_SCROLL)
-        return
-      }
-      if (event.id === 'shift+down') {
-        this.#scrollBy(TRANSCRIPT_FAST_SCROLL)
-        return
-      }
-      if (event.id === 'ctrl+o') {
-        const last = this.#state.blocks.at(-1)
-        const tool = last?.kind === 'toolCatalog'
-          ? undefined
-          : this.#state.blocks.findLast(block => block.kind === 'tool')
-        if (last?.kind === 'toolCatalog') {
-          this.#toolsExpanded = !this.#toolsExpanded
-        } else if (tool?.kind === 'tool') {
-          if (this.#expandedToolCalls.has(tool.callId)) this.#expandedToolCalls.delete(tool.callId)
-          else this.#expandedToolCalls.add(tool.callId)
-        } else {
-          this.#toolsExpanded = !this.#toolsExpanded
-        }
-        this.#renderer.startLayoutEpoch()
-        this.#render()
-        return
-      }
-    }
     this.#applyCommand(this.#editor.handle(event))
   }
 
@@ -2200,6 +2333,7 @@ export class LocalTui implements TuiService {
     this.#resumeHintRequested = true
     if (this.#pending !== null) {
       const pending = this.#pending
+      pending.offAbort?.()
       this.#pending = null
       pending.resolve(null)
     } else {
@@ -2248,6 +2382,7 @@ export class LocalTui implements TuiService {
     }
     const pending = this.#pending
     if (pending !== null) {
+      pending.offAbort?.()
       this.#pending = null
       pending.resolve({ text: submittedText, images })
       if (queueEditNewer !== null) this.#queuedSubmissions.push(...queueEditNewer)
@@ -2307,7 +2442,10 @@ export class LocalTui implements TuiService {
       return
     }
     if (command.name === 'clear') {
-      this.#state = initialTranscript()
+      // Presentation-only reset: the agent may still own an active turn with
+      // live status, todos, and queued inbox state. Clearing those would make
+      // the next Ctrl-C (or follow-up) behave as if the session had finished.
+      this.#state = { ...this.#state, blocks: [] }
       this.#followTail()
       this.#renderer.startEpoch()
       this.#render()
@@ -2335,6 +2473,7 @@ export class LocalTui implements TuiService {
       const raw = '/' + name + (args === '' ? '' : ' ' + args)
       const pending = this.#pending
       if (pending !== null) {
+        pending.offAbort?.()
         this.#pending = null
         pending.resolve({ text: raw, images: [] })
       } else {
@@ -2390,6 +2529,38 @@ export class LocalTui implements TuiService {
     this.#prompt = null
     pending.offAbort?.()
     pending.resolve(answer)
+    this.#restoreDisplacedSurface()
+  }
+
+  /** Save and close the visible overlay so a prompt owns both input and screen. */
+  #displaceSurface(): DisplacedSurface | null {
+    const displaced: DisplacedSurface | null = this.#trajectory !== null
+      ? { kind: 'trajectory', state: this.#trajectory }
+      : this.#agentHub !== null
+        ? { kind: 'agentHub', state: this.#agentHub }
+        : this.#settings !== null
+          ? { kind: 'settings', state: this.#settings }
+          : this.#copySelector !== null
+            ? { kind: 'copySelector', state: this.#copySelector }
+            : this.#search !== null ? { kind: 'search', state: this.#search } : null
+    this.#trajectory = null
+    this.#agentHub = null
+    this.#settings = null
+    this.#copySelector = null
+    this.#search = null
+    return displaced
+  }
+
+  /** Restore the surface displaced by the settled prompt, if one existed. */
+  #restoreDisplacedSurface(): void {
+    const displaced = this.#promptDisplaced
+    this.#promptDisplaced = null
+    if (displaced === null) return
+    if (displaced.kind === 'trajectory') this.#trajectory = displaced.state
+    else if (displaced.kind === 'agentHub') this.#agentHub = displaced.state
+    else if (displaced.kind === 'settings') this.#settings = displaced.state
+    else if (displaced.kind === 'copySelector') this.#copySelector = displaced.state
+    else this.#search = displaced.state
   }
 
   async #runCopy(args: string): Promise<void> {
@@ -2468,31 +2639,79 @@ export class LocalTui implements TuiService {
     this.#focusBlock = Math.max(0, this.#state.blocks.length - 1)
   }
 
-  #runAction(action: TuiAction): void {
-    if (this.#prompt !== null || this.#settings !== null || this.#copySelector !== null) return
+  /** Resolve a configured action for one key id, tolerating camelCase ids. */
+  #boundAction(id: string): TuiAction | undefined {
+    return this.#keybindings[id] ?? this.#keybindings[id.toLowerCase()]
+  }
+
+  /** Run one configured action; returns true when the event was consumed. */
+  #runAction(action: TuiAction): boolean {
+    if (this.#prompt !== null || this.#settings !== null || this.#copySelector !== null) return false
+    if (action === 'scroll-page-up') {
+      if (this.#search !== null) return false
+      this.#scrollBy(-this.#pageSize())
+      return true
+    }
+    if (action === 'scroll-page-down') {
+      if (this.#search !== null) return false
+      this.#scrollBy(this.#pageSize())
+      return true
+    }
+    if (action === 'scroll-fast-up') {
+      if (this.#search !== null) return false
+      this.#scrollBy(-TRANSCRIPT_FAST_SCROLL)
+      return true
+    }
+    if (action === 'scroll-fast-down') {
+      if (this.#search !== null) return false
+      this.#scrollBy(TRANSCRIPT_FAST_SCROLL)
+      return true
+    }
+    if (action === 'toggle-tools') {
+      if (this.#search !== null) return false
+      this.#toggleToolExpansion()
+      return true
+    }
+    if (action === 'search-history') {
+      if (this.#images.length > 0) return false
+      this.#search = createHistorySearch(this.#history)
+      this.#ac = null
+      this.#render()
+      return true
+    }
+    if (action === 'search-transcript') {
+      // An empty composer has no forward-char target, so Ctrl+F searches the
+      // transcript there; a non-empty draft keeps the editor's own binding.
+      if (this.#search !== null) return false
+      if (this.#editor.text !== '' || this.#images.length > 0) return false
+      this.#transcriptSearch = createTranscriptSearch()
+      this.#ac = null
+      this.#render()
+      return true
+    }
     if (action === 'inspect-subagent') {
       void this.#pickSubagent()
-      return
+      return true
     }
     if (action === 'retry') {
       this.#submit('/retry')
-      return
+      return true
     }
     if (action === 'cycle-model-forward') {
       this.#submit('/model next')
-      return
+      return true
     }
     if (action === 'cycle-model-backward') {
       this.#submit('/model previous')
-      return
+      return true
     }
     if (action === 'cycle-reasoning') {
       this.#submit('/model reasoning')
-      return
+      return true
     }
     if (action === 'copy-prompt') {
       void this.#copyPicked(this.#editor.text, 'current prompt')
-      return
+      return true
     }
     if (action === 'copy-line') {
       const text = this.#editor.text.slice(
@@ -2500,25 +2719,29 @@ export class LocalTui implements TuiService {
         lineEnd(this.#editor.text, this.#editor.cursor),
       )
       void this.#copyPicked(text, 'current line')
-      return
+      return true
     }
     if (action === 'paste-clipboard') {
       this.#startAsyncPaste(this.#pasteClipboard())
-      return
+      return true
     }
-    this.#releaseTerminalOwnership()
-    let editorError: string | undefined
-    try {
-      const text = this.#editExternally(this.#editor.text)
-      this.#editor.setText(text)
-      this.#reconcileImageDrafts()
-    } catch (error: unknown) {
-      editorError = error instanceof Error ? error.message : String(error)
-    } finally {
-      this.#refreshAutocomplete()
-      this.#restoreTerminalOwnership()
+    if (action === 'external-editor') {
+      this.#releaseTerminalOwnership()
+      let editorError: string | undefined
+      try {
+        const text = this.#editExternally(this.#editor.text)
+        this.#editor.setText(text)
+        this.#reconcileImageDrafts()
+      } catch (error: unknown) {
+        editorError = error instanceof Error ? error.message : String(error)
+      } finally {
+        this.#refreshAutocomplete()
+        this.#restoreTerminalOwnership()
+      }
+      if (editorError !== undefined) this.notice(editorError, { level: 'error' })
+      return true
     }
-    if (editorError !== undefined) this.notice(editorError, { level: 'error' })
+    return false
   }
 
   #releaseTerminalOwnership(): void {
@@ -2533,6 +2756,38 @@ export class LocalTui implements TuiService {
     this.#term.output.write('\x1b[?2004h')
     this.#renderer.resize(this.#term.width(), this.#term.height())
     this.#renderer.reacquire()
+    this.#render()
+  }
+
+  /** Expand or collapse the newest tool card, or the whole tool catalog. */
+  #toggleToolExpansion(): void {
+    const last = this.#state.blocks.at(-1)
+    const tool = last?.kind === 'toolCatalog'
+      ? undefined
+      : this.#state.blocks.findLast(block => block.kind === 'tool')
+    if (last?.kind === 'toolCatalog') {
+      this.#toolsExpanded = !this.#toolsExpanded
+    } else if (tool?.kind === 'tool') {
+      if (this.#expandedToolCalls.has(tool.callId)) this.#expandedToolCalls.delete(tool.callId)
+      else this.#expandedToolCalls.add(tool.callId)
+    } else {
+      this.#toolsExpanded = !this.#toolsExpanded
+    }
+    this.#render()
+  }
+
+  /** Fold one event into the active transcript search. */
+  #applyTranscriptSearch(event: KeyEvent): void {
+    const state = this.#transcriptSearch
+    if (state === null) return
+    const command = applyTranscriptSearchEvent(state, event, this.#state.blocks.map(blockSearchText))
+    if (command.kind === 'close') {
+      this.#transcriptSearch = null
+      this.#render()
+      return
+    }
+    this.#transcriptSearch = command.state
+    if (command.kind === 'focus') this.#focusBlock = command.block
     this.#render()
   }
 }
@@ -2565,7 +2820,6 @@ export function apply(ctx: Context, config: Config): void {
       deferInitialRender: true,
       terminalProfile,
       alternateScreenOverlays: terminalProfile === 'direct',
-      preserveInitialScreen: true,
       historyPath: config.historyPath ?? join(dshHome, 'omdsh', 'history.jsonl'),
       keybindingsPath: config.keybindingsPath ?? join(dshHome, 'omdsh', 'keybindings.json'),
     },

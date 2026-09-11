@@ -24,12 +24,12 @@ description: 用 @ 提及把 omdsh 指向精确的文件和会话，粘贴剪贴
 
 图片粘贴依赖平台剪贴板读取器。在 Linux 上，它在 Wayland 下使用 `wl-paste`，在 X11 下使用 `xclip`；如果两者都不存在，文本粘贴仍然可用，但无法直接捕获剪贴板图片。
 
-默认 DeepSeek catalog 包含可处理图片的 `deepseek-v4-flash-vision-exp`；其余默认 DeepSeek 模型仍是纯文本。若部署要让其他模型接受原生图片请求，须在该模型上声明 `inputModalities: [text, image]`。
+默认 DeepSeek catalog 包含可处理图片的 `deepseek-flash` 与 `deepseek-v4-flash-vision-exp`；其余默认 DeepSeek 模型仍是纯文本。若部署要让其他模型接受原生图片请求，须在该模型上声明 `inputModalities: [text, image]`。
 
 粘贴的图片会先通过准入检查，再规范化存储：
 
 - 源图最大 20 MiB、64,000,000 像素、单边 8192px。
-- 获准的图片存储为长边 2048px、编码数据不超过 4 MiB。
+- 获准的图片按 2048×2048 总像素预算、8192px 长边上限与 4 MiB 编码体积目标存储。以像素预算为准，因此极端长宽比会保留其短边分辨率，而不会被压到 2048px 长边。
 - 被拒绝的图片会显示错误提示，不会进入 Prompt。
 - 一条消息携带多张图片时会按顺序一次性准入；任一图片被拒绝时，Composer 文本和草稿都会保留。
 

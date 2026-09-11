@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import {
+  applySubagentDelta,
   applySubagentEvent,
+  catalogChildren,
   descendantDepth,
   isSteerableSubagent,
   shortSessionLabel,
@@ -85,13 +87,9 @@ describe('applySubagentEvent', () => {
     expect(state.activity).toEqual([{ text: 'read src/auth.ts', status: 'ok' }])
   })
 
-  it('does not churn on repeated thinking chunks', () => {
-    const first = applySubagentEvent(view({ phase: 'running' }), ev('assistant/chunk', {
-      chunk: { type: 'text-delta', text: 'a' },
-    }))
-    const second = applySubagentEvent(first, ev('assistant/chunk', {
-      chunk: { type: 'text-delta', text: 'b' },
-    }))
+  it('does not churn on repeated thinking deltas', () => {
+    const first = applySubagentDelta(view({ phase: 'running' }), { type: 'text-delta', index: 0, text: 'a' })
+    const second = applySubagentDelta(first, { type: 'text-delta', index: 0, text: 'b' })
     expect(second).toBe(first)
   })
 })
@@ -202,5 +200,74 @@ describe('SubagentRoster', () => {
     expect(roster.hasRunning()).toBe(false)
     roster.remember({ id: 'child-2', depth: 1, mode: 'one-shot', phase: 'running' })
     expect(roster.setAgentStatus('child-2', 'gone', true)?.phase).toBe('error')
+  })
+
+  it('folds live stream chunks only into remembered roster rows', () => {
+    const roster = new SubagentRoster()
+    roster.reset('root')
+    roster.remember({ id: 'child-1', depth: 1 })
+    const updated = roster.applyDelta('child-1', {
+      type: 'tool-call-delta',
+      index: 0,
+      id: 'c1',
+      name: 'bash',
+      argumentsDelta: '{}',
+    })
+    expect(updated).toMatchObject({
+      phase: 'running',
+      activity: [{ text: 'bash', status: 'running' }],
+    })
+    expect(roster.applyDelta('missing', { type: 'text-delta', index: 0, text: 'x' })).toBeUndefined()
+  })
+})
+
+describe('catalogChildren', () => {
+  it('reads the durable directory and keeps the latest fact per child', () => {
+    expect(catalogChildren([
+      ev('subagent/catalog', { version: 0, childId: 'child-1', childCreatedAt: 1, mode: 'one-shot' }, 1),
+      ev('subagent/catalog', { version: 0, childId: 'child-2', childCreatedAt: 2, mode: 'continuable', label: 'Worker' }, 2),
+      ev('subagent/catalog', { version: 0, childId: 'child-1', childCreatedAt: 1, mode: 'continuable', label: 'Renamed' }, 3),
+      ev('tool/call', { callId: 'c1', name: 'bash' }, 4),
+    ])).toEqual([
+      { id: 'child-1', mode: 'continuable', label: 'Renamed' },
+      { id: 'child-2', mode: 'continuable', label: 'Worker' },
+    ])
+  })
+
+  it('omits an absent or blank label instead of inventing a row title', () => {
+    expect(catalogChildren([
+      ev('subagent/catalog', { version: 0, childId: 'child-1', childCreatedAt: 1, mode: 'one-shot' }, 1),
+      ev('subagent/catalog', { version: 0, childId: 'child-2', childCreatedAt: 2, mode: 'one-shot', label: '   ' }, 2),
+    ])).toEqual([
+      { id: 'child-1', mode: 'one-shot' },
+      { id: 'child-2', mode: 'one-shot' },
+    ])
+  })
+})
+
+describe('SubagentRoster.observeCatalog', () => {
+  it('lists the durable children a resumed parent would otherwise lose', () => {
+    const roster = new SubagentRoster()
+    roster.reset('root')
+    expect(roster.observeCatalog('root', [
+      ev('subagent/catalog', { version: 0, childId: 'child-1', childCreatedAt: 1, mode: 'continuable', label: 'Worker' }, 1),
+      ev('subagent/catalog', { version: 0, childId: 'child-2', childCreatedAt: 2, mode: 'one-shot' }, 2),
+    ])).toBe(true)
+    expect(roster.snapshot()?.agents).toMatchObject([
+      { id: 'child-1', parentId: 'root', depth: 1, label: 'Worker', mode: 'continuable', phase: 'completed' },
+      { id: 'child-2', parentId: 'root', depth: 1, mode: 'one-shot', phase: 'completed' },
+    ])
+  })
+
+  it('leaves a child the live path already tracks on its own state', () => {
+    const roster = new SubagentRoster()
+    roster.reset('root')
+    roster.remember({ id: 'child-1', parentId: 'root', depth: 1, phase: 'running' })
+    expect(roster.observeCatalog('root', [
+      ev('subagent/catalog', { version: 0, childId: 'child-1', childCreatedAt: 1, mode: 'continuable', label: 'Late label' }, 1),
+    ])).toBe(false)
+    expect(roster.snapshot()?.agents).toMatchObject([
+      { id: 'child-1', phase: 'running', label: shortSessionLabel('child-1') },
+    ])
   })
 })

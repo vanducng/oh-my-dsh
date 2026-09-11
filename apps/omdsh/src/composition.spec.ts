@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { spawnSync } from 'node:child_process'
+import { spawnPnpm } from './test-support/pnpm.ts'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,6 +18,7 @@ import {
   writeAll,
 } from './composition.ts'
 import { composeLaunch } from './profile.ts'
+import { interpolate } from '@deepseek-ai/cordis-plugin-loader'
 
 const appRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -45,12 +47,63 @@ describe('boot patch assembly', () => {
       PRODUCT_BUNDLE,
       PROFILE_PATCH_LABEL,
       'mcp.json',
-      'agent-presets',
     ])
     expect(loadBootPatches(cwd, { OMDSH_HOME: home })).toEqual(expect.arrayContaining([
       expect.objectContaining({ insert: expect.arrayContaining([expect.objectContaining({ id: 'tui' })]) }),
       expect.objectContaining({ insert: [expect.objectContaining({ id: 'mcp-memory' })] }),
     ]))
+  })
+
+  it('mounts exactly one shell stack for the running platform', () => {
+    const patches = loadBootPatches(temp('omdsh-shell-cwd-'), { OMDSH_HOME: temp('omdsh-shell-home-') })
+    const rows = patches.flatMap((patch) => {
+      const inserted = (patch as { insert?: Array<{ id?: string; disabled?: unknown }> }).insert
+      return Array.isArray(inserted) ? inserted : [patch as { id?: string; disabled?: unknown }]
+    })
+    // Row-level `disabled` is a `!!js` expression node the loader evaluates at
+    // activation; evaluating it here pins the same decision per platform.
+    const active = (id: string): boolean => {
+      const row = rows.find(candidate => candidate.id === id)
+      if (row === undefined) return false
+      const disabled = row.disabled
+      return disabled === undefined || interpolate({} as Context, disabled) !== true
+    }
+    expect(active('bash')).not.toBe(active('pwsh'))
+    expect(active('tool-bash')).not.toBe(active('tool-pwsh'))
+    if (process.platform === 'win32') {
+      expect(active('pwsh')).toBe(true)
+      expect(active('tool-pwsh')).toBe(true)
+    } else {
+      expect(active('bash')).toBe(true)
+      expect(active('tool-bash')).toBe(true)
+    }
+  })
+
+  it('inserts the language-server trio after MCP inserts', () => {
+    const cwd = temp('omdsh-compose-project-')
+    const home = temp('omdsh-compose-home-')
+    mkdirSync(join(cwd, '.dsh'), { recursive: true })
+    writeFileSync(join(cwd, '.dsh', 'mcp.json'), JSON.stringify({
+      mcpServers: { memory: { command: 'memory-server' } },
+    }))
+    writeFileSync(join(cwd, '.dsh', 'lsp.json'), JSON.stringify({
+      servers: {
+        typescript: {
+          command: 'typescript-language-server',
+          args: ['--stdio'],
+          extensionToLanguage: { '.ts': 'typescript' },
+        },
+      },
+    }))
+    expect(composeLaunch(cwd, { OMDSH_HOME: home }).layers.map(layer => layer.label)).toEqual([
+      PRODUCT_BUNDLE,
+      PROFILE_PATCH_LABEL,
+      'mcp.json',
+      'lsp.json',
+    ])
+    const lsp = loadBootPatches(cwd, { OMDSH_HOME: home })
+      .flatMap(patch => (patch as { insert?: { id?: string }[] }).insert ?? [])
+    expect(lsp.map(row => row.id)).toEqual(expect.arrayContaining(['lsp', 'lsp-stdio', 'tool-lsp']))
   })
 
   it('applies a home cordis.patch.yml before MCP inserts', () => {
@@ -66,7 +119,6 @@ describe('boot patch assembly', () => {
       PROFILE_PATCH_LABEL,
       'cordis.patch.yml',
       'mcp.json',
-      'agent-presets',
     ])
     const patches = loadBootPatches(cwd, { OMDSH_HOME: home })
     const homeIndex = patches.findIndex(patch => !('insert' in patch) && (patch as { id?: string }).id === 'tui')
@@ -87,14 +139,17 @@ describe('boot patch assembly', () => {
     writeFileSync(join(cwd, '.dsh', 'mcp.json'), JSON.stringify({
       mcpServers: { memory: { command: 'memory-server' } },
     }))
-    expect(composeLaunch(cwd, { OMDSH_HOME: home }).layers.map(layer => layer.label)).toEqual([
+    const composed = composeLaunch(cwd, { OMDSH_HOME: home })
+    expect(composed.layers.map(layer => layer.label)).toEqual([
       PRODUCT_BUNDLE,
       PROFILE_PATCH_LABEL,
       'mcp.json',
       'omdsh/plugins.yml',
       'omdsh/cordis.patch.yml',
-      'agent-presets',
     ])
+    expect(composed.patches.some(patch => (
+      !('insert' in patch) && (patch as { id?: string }).id === 'agent-presets'
+    ))).toBe(false)
   })
 
   it('fails loud when the home patch file is present but not a list', () => {
@@ -161,9 +216,9 @@ describe('boot patch assembly', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { dependencies?: Record<string, string> }
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.2-rc.1')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.2-rc.1')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.2-rc.1')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.5-rc.1')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.5-rc.1')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.5-rc.1')
   })
 
   it('updates the provider output fallback without replacing its model catalog', () => {
@@ -247,7 +302,7 @@ describe('boot patch assembly', () => {
 
   it('prints the composed tree from the bin and exits 0 without booting a session', () => {
     const home = temp('omdsh-dump-bin-')
-    const result = spawnSync('pnpm', ['exec', 'tsx', 'src/bin.ts', '--dump-config'], {
+    const result = spawnPnpm(['exec', 'tsx', 'src/bin.ts', '--dump-config'], {
       cwd: appRoot,
       encoding: 'utf8',
       env: { ...process.env, OMDSH_HOME: home },
@@ -267,7 +322,7 @@ describe('boot patch assembly', () => {
     const env = { ...process.env }
     delete env.OMDSH_HOME
     delete env.DSH_HOME
-    const result = spawnSync(join(appRoot, 'node_modules/.bin/tsx'), [join(appRoot, 'src/bin.ts'), '--dump-config'], {
+    const result = spawnSync(process.execPath, [join(appRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), join(appRoot, 'src/bin.ts'), '--dump-config'], {
       cwd,
       encoding: 'utf8',
       env,
@@ -281,7 +336,7 @@ describe('boot patch assembly', () => {
   it('exits 1 with one labelled line when the home patch is invalid', () => {
     const home = temp('omdsh-dump-bin-bad-')
     writeFileSync(join(home, 'cordis.patch.yml'), '')
-    const result = spawnSync('pnpm', ['exec', 'tsx', 'src/bin.ts', '--dump-config'], {
+    const result = spawnPnpm(['exec', 'tsx', 'src/bin.ts', '--dump-config'], {
       cwd: appRoot,
       encoding: 'utf8',
       env: { ...process.env, OMDSH_HOME: home },
@@ -380,7 +435,7 @@ describe('dsh spine expansion', () => {
   it('skips a spine-targeted home patch silently without breaking boot', () => {
     const home = temp('omdsh-spine-patch-home-')
     writeFileSync(join(home, 'cordis.patch.yml'), '- id: spine\n  config:\n    workspaceContext:\n      maxBytes: 4096\n')
-    const result = spawnSync('pnpm', ['exec', 'tsx', 'src/bin.ts'], {
+    const result = spawnPnpm(['exec', 'tsx', 'src/bin.ts'], {
       cwd: appRoot,
       input: 'hi\n',
       encoding: 'utf8',
@@ -398,7 +453,7 @@ describe('dsh spine expansion', () => {
     const home = temp('omdsh-spine-migrated-home-')
     writeFileSync(join(home, 'cordis.patch.yml'),
       '- id: agent-instructions\n  config:\n    maxBytes: 12345\n')
-    const result = spawnSync('pnpm', ['exec', 'tsx', 'src/bin.ts', '--dump-config'], {
+    const result = spawnPnpm(['exec', 'tsx', 'src/bin.ts', '--dump-config'], {
       cwd: appRoot,
       encoding: 'utf8',
       env: { ...process.env, OMDSH_HOME: home },
@@ -419,5 +474,74 @@ describe('dsh spine expansion', () => {
     expect(minimal).toContain('cordis:group')
     expect(minimal).toContain('@deepseek-ai/dsh-tool-bash-persistent')
     expect(standard).not.toContain('@deepseek-ai/dsh-tool-bash-persistent')
+  })
+})
+
+describe('upstream capability adaptation rows', () => {
+  function productRows(): Array<{ id?: string; name?: string; config?: Record<string, unknown> }> {
+    const patches = loadBootPatches(temp('omdsh-adapt-cwd-'), { OMDSH_HOME: temp('omdsh-adapt-home-') })
+    const product = patches[0] as { insert?: Array<{ id?: string; name?: string; config?: Record<string, unknown> }> }
+    return product.insert ?? []
+  }
+
+  it('mounts both subagent providers with distinct tool names', () => {
+    const rows = productRows()
+    const row = (id: string) => rows.find(entry => entry.id === id)
+    expect(row('subagent-fork')?.name).toBe('@deepseek-ai/dsh-subagent-fork-in-process')
+    expect(row('subagent-fork')?.config).toMatchObject({ providerName: 'fork' })
+    expect(row('tool-subagent')?.config).toMatchObject({ provider: 'spawn', toolName: 'subagent' })
+    expect(row('tool-subagent-fork')?.config).toMatchObject({ provider: 'fork', toolName: 'subagent_fork' })
+    expect(row('tool-subagent-fork')?.name).toBe(row('tool-subagent')?.name)
+  })
+
+  it('spills oversized tool results before the compaction pruner runs', () => {
+    const rows = productRows()
+    const index = (id: string) => rows.findIndex(entry => entry.id === id)
+    expect(rows[index('spill-local')]?.name).toBe('@deepseek-ai/dsh-spill-local')
+    expect(rows[index('spill-policy')]?.name).toBe('@deepseek-ai/dsh-spill-policy')
+    expect(rows[index('spill-policy')]?.config).toMatchObject({ maxInlineBytes: 200000 })
+    expect(index('spill-policy')).toBeLessThan(index('tool-result-pruner'))
+  })
+
+  it('mounts anonymous web fetch and leaves search disabled', () => {
+    const rows = productRows()
+    const index = (id: string) => rows.findIndex(entry => entry.id === id)
+    expect(rows[index('web')]?.name).toBe('@deepseek-ai/dsh-web')
+    expect(rows[index('web-fetch-http')]?.name).toBe('@deepseek-ai/dsh-web-fetch-http')
+    expect(rows[index('tool-web')]?.name).toBe('@deepseek-ai/dsh-tool-web')
+    expect(rows[index('tool-web')]?.config).toMatchObject({ search: false, fetch: true })
+    expect(index('web')).toBeLessThan(index('web-fetch-http'))
+    expect(index('web-fetch-http')).toBeLessThan(index('tool-web'))
+  })
+
+  it('opens session full-text search lazily instead of disabling it', () => {
+    const rows = productRows()
+    const row = rows.find(entry => entry.id === 'session-query')
+    expect(row?.name).toBe('@deepseek-ai/dsh-session-query-sqlite')
+    // first-search keeps startup free of experimental node:sqlite while still
+    // allowing the Session Library to search session content.
+    expect(row?.config).toMatchObject({ openAt: 'first-search' })
+  })
+
+  it('mounts the persistent terminal stack after the jobs service', () => {
+    const rows = productRows()
+    const index = (id: string) => rows.findIndex(entry => entry.id === id)
+    expect(rows[index('terminal')]?.name).toBe('@deepseek-ai/dsh-terminal')
+    expect(rows[index('terminal-bash')]?.name).toBe('@deepseek-ai/dsh-terminal-bash')
+    expect(rows[index('tool-terminal')]?.name).toBe('@deepseek-ai/dsh-tool-terminal')
+    // Background sends need the jobs service, so tool-terminal follows it.
+    expect(index('tool-jobs')).toBeLessThan(index('terminal'))
+    expect(index('terminal')).toBeLessThan(index('terminal-bash'))
+    expect(index('terminal-bash')).toBeLessThan(index('tool-terminal'))
+  })
+
+  it('mounts the present delivery tool beside the workspace file tools', () => {
+    const rows = productRows()
+    const index = (id: string) => rows.findIndex(entry => entry.id === id)
+    expect(rows[index('tool-present')]?.name).toBe('@deepseek-ai/dsh-tool-present')
+    // present resolves paths through the Session filesystem and appends
+    // deliverables to the Session log, so those services mount first.
+    expect(index('fs')).toBeLessThan(index('tool-present'))
+    expect(index('tools')).toBeLessThan(index('tool-present'))
   })
 })

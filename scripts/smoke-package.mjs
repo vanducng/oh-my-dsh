@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { packedInstallOverrides } from './packed-install-overrides.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const temp = mkdtempSync(join(tmpdir(), 'omdsh-package-'))
@@ -52,13 +53,11 @@ try {
   const cliTarball = join(temp, `vanducng-oh-my-dsh-${cliVersion}.tgz`)
   const prefix = join(temp, 'install')
   mkdirSync(prefix, { recursive: true })
+  const cliManifest = JSON.parse(readFileSync(join(root, 'apps/omdsh/package.json'), 'utf8'))
+  const tuiManifest = JSON.parse(readFileSync(join(root, 'packages/tui/omdsh-tui/package.json'), 'utf8'))
   writeFileSync(join(prefix, 'package.json'), JSON.stringify({
     private: true,
-    overrides: {
-      '@deepseek-ai/cordis': '4.0.1',
-      '@deepseek-ai/cordis-plugin-include': '1.0.6',
-      '@deepseek-ai/cordis-plugin-group': '1.0.1',
-    },
+    overrides: packedInstallOverrides(cliManifest, tuiManifest),
   }))
 
   run('npm', ['install', '--ignore-scripts', '--prefix', prefix, tuiTarball, cliTarball], prefix)

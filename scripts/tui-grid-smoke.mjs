@@ -96,7 +96,7 @@ try {
   const boot = await session.waitFor(
     (text) => text.includes('Into the Unknown')
       && /│\s+high\s+│/u.test(text)
-      && /deepseek-v4-flash(?: · high)? · ptc/u.test(text)
+      && /deepseek-flash(?: · high)? · ptc/u.test(text)
       && text.includes('🐳'),
     'boot header, model footer, and composer',
   )

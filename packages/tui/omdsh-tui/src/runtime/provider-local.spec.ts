@@ -4,7 +4,10 @@
  * scroll, Ctrl-O tool expand, submit), double-Escape rewind, double Ctrl-C exit, Ctrl-D quit and the
  * cross-turn quit latch, plain-mode line input, and event rendering.
  */
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
@@ -150,31 +153,37 @@ describe('LocalTui (tty)', () => {
   it('keeps the welcome card when a durable transcript replaces the startup frame', () => {
     const term = new FakeTerminal()
     term.rows = 12
-    const tui = new LocalTui(term, 'm', false)
-    expect(term.captured).not.toContain('\x1b[3J')
+    // ED3 is a direct-terminal behavior; conpty and multiplexer profiles skip it.
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { terminalProfile: 'direct' })
+    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(1)
 
     const restored = Array.from({ length: 30 }, (_, index) => `restored-${index}`).join('\n')
     tui.replaceSession([
       ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'resumed prompt' }] }, 1),
-      ev('assistant/chunk', {
+      ev('assistant/message', {
         turn: 1,
         step: 1,
-        chunk: { type: 'text-delta', text: restored },
+        message: { content: [{ type: 'text', text: restored }] },
+        stream: [],
       }, 2),
     ])
 
-    expect(term.captured).not.toContain('\x1b[3J')
+    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(2)
     const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
+    expect(screen).toContain('resumed prompt')
+    expect(screen).toContain('restored-0')
+    expect(screen).toContain('restored-15')
     expect(screen).toContain('restored-29')
-    expect(term.captured).toContain('Into the Unknown')
-    expect(term.captured).not.toContain('\x1b[?1049h')
+    expect(screen).toContain('Into the Unknown')
     tui.dispose()
-    expect(term.captured).toContain('restored-29')
   })
 
   it('defers the production first frame until the initial session is available', () => {
     const term = new FakeTerminal()
-    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { deferInitialRender: true })
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      deferInitialRender: true,
+      terminalProfile: 'direct',
+    })
 
     expect(term.captured).not.toContain('Into the Unknown')
     expect(term.captured).not.toContain('\x1b[3J')
@@ -186,7 +195,7 @@ describe('LocalTui (tty)', () => {
     ], undefined, 'idle')
     expect(term.captured).toContain('Into the Unknown')
     expect(term.captured).toContain('initial session')
-    expect(term.captured).not.toContain('\x1b[3J')
+    expect(term.captured.match(/\x1b\[3J/gu)).toHaveLength(1)
     tui.dispose()
   })
 
@@ -257,35 +266,37 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('keeps streaming assistant surfaces off main scrollback through resize and settlement', async () => {
+  it('keeps streaming assistant surfaces append-only through resize', () => {
     const term = new FakeTerminal()
     term.rows = 8
-    const tui = new LocalTui(term, 'm', false)
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { streamRenderMs: 0 })
+    tui.applyStoredPrefs({
+      theme: 'dark',
+      colors: false,
+      motion: 'off',
+      terminalProgress: false,
+      expandTools: false,
+    })
     term.captured = ''
 
-    tui.event(ev('assistant/chunk', {
+    tui.streamDelta({
       turn: 1,
       step: 1,
-      chunk: { type: 'text-delta', index: 0, text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n') },
-    }, 1))
-    await new Promise<void>(resolve => { setTimeout(resolve, 50) })
-    expect(term.captured).toContain('\x1b[?1049h')
-    expect(term.captured).not.toContain('\x1b[?1049l')
+      chunk: {
+        type: 'text-delta',
+        index: 0,
+        text: Array.from({ length: 20 }, (_, index) => `draft-${index}`).join('\n'),
+      },
+    })
+    expect(term.captured).toContain('draft-0')
+    expect(term.captured).not.toContain('\x1b[?1049h')
     expect(term.captured).not.toContain('\x1b[3J')
 
     const beforeResize = term.captured.length
     term.resize(term.columns, 5)
     const resizePaint = term.captured.slice(beforeResize)
-    expect(resizePaint).toContain('\x1b[?1049l')
-    expect(resizePaint).toContain('\x1b[?1049h')
-    tui.event(ev('assistant/message', {
-      turn: 1,
-      step: 1,
-      message: { content: [{ type: 'text', text: 'final assistant text' }] },
-    }, 2))
-    expect(term.captured).toContain('\x1b[?1049l')
-    expect(term.captured).toContain('final assistant text')
-    expect(term.captured).not.toContain('\x1b[3J')
+    expect(resizePaint).not.toContain('\x1b[3J')
+    expect(resizePaint).not.toContain('\x1b[?1049h')
     tui.dispose()
   })
 
@@ -802,17 +813,16 @@ describe('LocalTui (tty)', () => {
     })
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
     try {
-      tui.event(ev('assistant/chunk', {
+      tui.streamDelta({
         turn: 1,
         step: 1,
         chunk: { type: 'text-delta', index: 0, text: 'streaming' },
-      }, 1))
-      expect(term.captured).toContain('\x1b[?1049h')
+      })
+      expect(term.captured).toContain('streaming')
 
       press(term, '\x1a')
       expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTSTP')
       expect(term.raw).toBe(false)
-      expect(term.captured).toContain('\x1b[?1049l')
       expect(term.captured).toContain('\x1b[?2004l')
 
       term.output.write('SHELL-JOB\r\nSHELL-PROMPT\r\n')
@@ -820,7 +830,6 @@ describe('LocalTui (tty)', () => {
       process.emit('SIGCONT')
       await Promise.resolve()
       expect(term.raw).toBe(true)
-      expect(term.captured.match(/\x1b\[\?1049h/gu)?.length).toBeGreaterThan(1)
       expect(term.captured.slice(hostMark)).toContain('streaming')
       expect(term.captured.slice(hostMark)).not.toContain('\x1b[3J')
 
@@ -852,24 +861,19 @@ describe('LocalTui (tty)', () => {
       terminalProgress: false,
       expandTools: false,
     })
-    tui.event(ev('assistant/chunk', {
+    tui.streamDelta({
       turn: 1,
       step: 1,
       chunk: { type: 'text-delta', index: 0, text: 'streaming' },
-    }, 1))
-    expect(term.captured).toContain('\x1b[?1049h')
+    })
+    expect(term.captured).toContain('streaming')
 
     const mark = term.captured.length
     press(term, '\x07')
     const handoff = term.captured.slice(mark)
-    const editorEnter = handoff.indexOf('\x1b[?1049hEDITOR')
-    const editorExit = handoff.indexOf('\x1b[?1049l', editorEnter)
     expect(rawDuringEditor).toBe(false)
-    expect(handoff.indexOf('\x1b[?1049l')).toBeLessThan(editorEnter)
-    expect(editorEnter).toBeGreaterThanOrEqual(0)
-    expect(editorExit).toBeGreaterThan(editorEnter)
+    expect(handoff).toContain('\x1b[?1049hEDITOR')
     expect(handoff).toContain('EDITOR-MAIN')
-    expect(handoff.lastIndexOf('\x1b[?1049h')).toBeGreaterThan(handoff.indexOf('EDITOR-MAIN'))
     expect(handoff).toContain('\x1b[?2004l')
     expect(handoff).toContain('\x1b[?2004h')
     expect(handoff).not.toContain('\x1b[3J')
@@ -929,11 +933,11 @@ describe('LocalTui (tty)', () => {
       tui.setStatus('running')
       const initialWrites = term.writes
 
-      tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'a' } }, 1))
+      tui.streamDelta({ turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'a' } })
       tui.setSession({ id: 'streaming', recent: [], stats: { ...stats, outputTokens: 1 } })
-      tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'b' } }, 2))
+      tui.streamDelta({ turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'b' } })
       tui.setSession({ id: 'streaming', recent: [], stats: { ...stats, outputTokens: 2 } })
-      tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'c' } }, 3))
+      tui.streamDelta({ turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'c' } })
       tui.setSession({ id: 'streaming', recent: [], stats: { ...stats, outputTokens: 3 } })
       tui.setSession({
         id: 'session-stream',
@@ -947,7 +951,7 @@ describe('LocalTui (tty)', () => {
       expect(term.captured).toContain('abc')
       expect(stripAnsi(term.captured)).toContain('ptc')
 
-      tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'd' } }, 4))
+      tui.streamDelta({ turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'd' } })
       tui.event(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 5))
       expect(term.writes).toBe(initialWrites + 2)
       expect(term.captured).toContain('abcd')
@@ -971,11 +975,11 @@ describe('LocalTui (tty)', () => {
       expandTools: false,
     })
     tui.setStatus('running')
-    tui.event(ev('assistant/chunk', {
+    tui.streamDelta({
       turn: 1,
       step: 1,
       chunk: { type: 'text-delta', index: 0, text: 'direct chunk' },
-    }, 1))
+    })
     const screen = emulatedScreenRows(term.captured).map(stripAnsi).join('\n')
     expect(screen).toContain('direct chunk')
     expect(screen).toContain('⟳ Deep Driving')
@@ -1374,20 +1378,21 @@ describe('LocalTui (tty)', () => {
   })
 
   it('completes @ paths from the injected listing', () => {
+    const proj = resolve('/proj')
     const listing = (dir: string): readonly DirEntry[] | undefined => {
-      if (dir === '/proj') {
+      if (dir === proj) {
         return [
           { name: 'src', directory: true },
           { name: 'README.md', directory: false },
         ]
       }
-      if (dir === '/proj/src') return [{ name: 'index.ts', directory: false }]
+      if (dir === join(proj, 'src')) return [{ name: 'index.ts', directory: false }]
       return undefined
     }
     const term = new FakeTerminal()
     const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
-      cwd: '/proj',
-      home: '/home/me',
+      cwd: proj,
+      home: resolve('/home/me'),
       listDir: listing,
     })
     press(term, '@')
@@ -1625,6 +1630,7 @@ describe('LocalTui (tty)', () => {
       turn: 1,
       step: 1,
       message: { content: [{ type: 'text', text: 'hello from the model' }] },
+      stream: [],
     }, 1))
     press(term, '/copy text\r')
     await new Promise((resolve) => { setTimeout(resolve, 0) })
@@ -1644,6 +1650,7 @@ describe('LocalTui (tty)', () => {
       turn: 1,
       step: 1,
       message: { content: [{ type: 'text', text: 'hello from the model' }] },
+      stream: [],
     }, 1))
     press(term, '/copy\r')
     expect(term.captured).toContain('hello from the model')
@@ -1863,12 +1870,13 @@ describe('LocalTui (tty)', () => {
         groups: ['context', 'cache', 'tokens', 'speed', 'durations', 'counts'],
         order: ['context', 'cache', 'tokens', 'speed', 'durations', 'counts'],
         meta: ['model', 'effort', 'path', 'git'],
-        metaOrder: ['model', 'effort', 'path', 'git'],
+        metaOrder: ['model', 'effort', 'path', 'git', 'session'],
         colors: {
           model: 'default',
           effort: 'default',
           path: 'default',
           git: 'default',
+          session: 'default',
           metrics: 'default',
           context: 'default',
           cache: 'default',
@@ -1882,6 +1890,7 @@ describe('LocalTui (tty)', () => {
           effort: 'left',
           path: 'right',
           git: 'right',
+          session: 'left',
           context: 'left',
           cache: 'left',
           tokens: 'left',
@@ -1896,6 +1905,25 @@ describe('LocalTui (tty)', () => {
     expect(term.captured).not.toContain('Theme: dark')
     press(term, 'ok\r')
     expect(await pending).toBe('ok')
+    tui.dispose()
+  })
+
+  it('mirrors the folded session title into the terminal window title', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    const titleWrites = (sequence: string): number => term.captured.split(sequence).length - 1
+
+    tui.setSession({ id: 'session-1', title: 'Fix \u001b[31mthe parser\u0007', recent: [] })
+    // Control characters are replaced, so a title can never inject or close OSC 2.
+    const written = '\x1b]2;Fix [31mthe parser\x07'
+    expect(titleWrites(written)).toBe(1)
+
+    // An unchanged title must not re-emit the sequence on every session push.
+    tui.setSession({ id: 'session-1', title: 'Fix \u001b[31mthe parser\u0007', recent: [] })
+    expect(titleWrites(written)).toBe(1)
+
+    tui.setSession({ id: 'session-1', title: 'Add the export flag', recent: [] })
+    expect(term.captured).toContain('\x1b]2;Add the export flag\x07')
     tui.dispose()
   })
 
@@ -1981,6 +2009,52 @@ describe('LocalTui (tty)', () => {
     press(term, '\x12')
     expect(term.captured).toContain('Search History')
     expect(term.captured).toContain('find the files')
+    tui.dispose()
+  })
+
+  it('honors a remapped history-search chord', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'omdsh-keys-')), 'keys.json')
+    writeFileSync(path, JSON.stringify({ 'ctrl+r': 'toggle-tools', 'alt+s': 'search-history' }))
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false, 'dark', async () => {}, { keybindingsPath: path })
+    const first = tui.readline()
+    press(term, 'find the files\r')
+    await first
+    void tui.readline()
+
+    press(term, '\x12')
+    expect(term.captured).not.toContain('Search History')
+    press(term, '\x1bs')
+    expect(term.captured).toContain('Search History')
+    tui.dispose()
+  })
+
+  it('opens transcript search with ctrl+f on an empty composer', async () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    const first = tui.readline()
+    press(term, 'find the needle\r')
+    await first
+    void tui.readline()
+
+    press(term, '\x06')
+    expect(term.captured).toContain('Search:')
+    press(term, 'needle')
+    expect(term.captured).toContain('Search: needle')
+    press(term, '\r')
+    press(term, 'n')
+    expect(term.captured).toContain('n/N next')
+    tui.dispose()
+  })
+
+  it('leaves ctrl+f to the editor while a draft is present', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    void tui.readline()
+
+    press(term, 'ab')
+    press(term, '\x06')
+    expect(term.captured).not.toContain('Search:')
     tui.dispose()
   })
 
@@ -2373,10 +2447,15 @@ describe('LocalTui (plain)', () => {
     term.output.isTTY = false
     const tui = new LocalTui(term, 'm', false)
     tui.event(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'q' }] }, 1))
-    tui.event(ev('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial' } }, 2))
+    tui.streamDelta({ turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'partial' } })
     expect(term.captured).toContain('q')
     expect(term.captured).not.toContain('partial')
-    tui.event(ev('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'final' }] } }, 3))
+    tui.event(ev('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: { content: [{ type: 'text', text: 'final' }] },
+      stream: [],
+    }, 3))
     expect(term.captured).toContain('final')
     tui.dispose()
   })

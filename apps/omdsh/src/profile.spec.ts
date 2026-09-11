@@ -61,16 +61,12 @@ describe('omdsh profile', () => {
     expect(readFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), 'utf8')).toMatch(/^# omdsh profile root/u)
     expect(readFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), 'utf8')).toMatch(/\n\[\]\n$/u)
     const composed = composeLaunch(temp('omdsh-profile-cwd-'), { OMDSH_HOME: home })
-    const overlay = composed.layers.find(layer => layer.label === 'agent-presets')
-    expect(overlay?.patches).toEqual([
-      expect.objectContaining({
-        id: 'agent-presets',
-        config: expect.objectContaining({
-          includeShippedRoot: false,
-          roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
-        }),
-      }),
-    ])
+    expect(composed.layers.map(layer => layer.label)).not.toContain('agent-presets')
+    const product = composed.layers[0]?.patches[0] as { insert?: Array<{ id?: string; config?: Record<string, unknown> }> }
+    expect(product.insert?.find(entry => entry.id === 'agent-presets')?.config).toEqual(expect.objectContaining({
+      includeShippedRoot: false,
+      roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
+    }))
   })
 
   it('loads a user bundle layer after the product bundle', () => {
@@ -91,6 +87,10 @@ describe('omdsh profile', () => {
     }, undefined, 2) + '\n')
     const composed = composeLaunch(temp('omdsh-profile-user-cwd-'), { OMDSH_HOME: home })
     expect(composed.layers.map(layer => layer.label).slice(0, 2)).toEqual([PRODUCT_BUNDLE, '@scope/dsh-example'])
+    expect(composed.layers.map(layer => layer.label)).not.toContain('agent-presets')
+    expect(composed.patches.some(patch => (
+      !('insert' in patch) && (patch as { id?: string }).id === 'agent-presets'
+    ))).toBe(false)
     expect(composed.patches).toEqual(expect.arrayContaining([
       expect.objectContaining({ insert: [expect.objectContaining({ id: 'example', name: '@scope/dsh-example' })] }),
     ]))
