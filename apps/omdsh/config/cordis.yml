@@ -41,6 +41,19 @@
       fallbackMaxBytes: 80
       maxTitleBytes: 120
 
+  # LLM title provider over the first prompt — the row the harness base ships,
+  # so omdsh sessions get a summarized title instead of the deterministic
+  # fallback (first words or the cwd basename) that the recent-session list
+  # and the web sidebar currently show.
+  - id: session-title-llm
+    name: '@deepseek-ai/dsh-session-title-first-prompt-llm'
+    config:
+      targetWords: 5
+      targetCjkCharacters: 10
+      maxInputBytes: 4096
+      maxOutputTokens: 64
+      timeoutMs: 60000
+
   - id: session-stats
     name: '@deepseek-ai/dsh-session-stats'
 
@@ -56,23 +69,12 @@
   - id: session-reference
     name: '@deepseek-ai/dsh-session-reference'
 
-  # Workspace @file discovery. The TUI owns mention syntax; this provider
-  # ranks path-only candidates and, when `read` is visible, adds the stable
-  # file-reference instruction. Selecting a row still inserts a path.
-  - id: file-reference
-    name: '@deepseek-ai/dsh-file-reference-local'
-
-  - id: attachments
-    name: '@deepseek-ai/dsh-attachment-local'
-    config:
-      dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
-
-
-  # Plugin-facing storage facility, mounted at the harness release omdsh pins
-  # so out-of-tree plugins share one instance instead of installing their own.
-  # Bare `$OMDSH_HOME/omdsh/plugins.yml` rows (for example dsh-observe) consume
-  # `storageDomain` from this product bundle; they do not apply their own
-  # bundle patch.
+  # Durable KV stack plus the workspace registry. The same storage instance
+  # also serves out-of-tree plugins (`$OMDSH_HOME/omdsh/plugins.yml` rows such
+  # as dsh-observe consume `storageDomain` from this product bundle). The
+  # registry groups sessions by canonical cwd; omdsh attaches each session it
+  # creates so grouped surfaces can file it. The storage root follows the
+  # session store so both read the same home.
   - id: storage
     name: '@deepseek-ai/dsh-storage'
 
@@ -85,6 +87,20 @@
     name: '@deepseek-ai/dsh-storage-domain'
     config:
       backend: json
+
+  - id: workspace
+    name: '@deepseek-ai/dsh-workspace'
+
+  # Workspace @file discovery. The TUI owns mention syntax; this provider
+  # ranks path-only candidates and, when `read` is visible, adds the stable
+  # file-reference instruction. Selecting a row still inserts a path.
+  - id: file-reference
+    name: '@deepseek-ai/dsh-file-reference-local'
+
+  - id: attachments
+    name: '@deepseek-ai/dsh-attachment-local'
+    config:
+      dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
 
   # User settings document ($DSH_HOME/settings.yaml) and credential sources
   # (inherited env, managed .credentials.yaml, project/user .env) — the same
