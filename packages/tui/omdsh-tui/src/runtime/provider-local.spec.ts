@@ -315,7 +315,10 @@ describe('LocalTui (tty)', () => {
   it('keeps running tool previews off main scrollback through shrink and settlement', () => {
     const term = new FakeTerminal()
     term.rows = 8
-    const tui = new LocalTui(term, 'm', false)
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      terminalProfile: 'direct',
+      streamRenderMs: 0,
+    })
     term.captured = ''
 
     tui.event(ev('tool/call', {
@@ -374,7 +377,7 @@ describe('LocalTui (tty)', () => {
 
   it('clears and fully repaints after the terminal is resized', () => {
     const term = new FakeTerminal()
-    const tui = new LocalTui(term, 'm', false)
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { terminalProfile: 'direct' })
     const before = term.captured.length
 
     term.resize(42, 18)
@@ -2023,6 +2026,7 @@ describe('LocalTui (tty)', () => {
 
   it('treats an empty NO_COLOR as unset for an unconfigured session', () => {
     vi.stubEnv('NO_COLOR', '')
+    vi.stubEnv('FORCE_COLOR', '')
     vi.stubEnv('COLORTERM', 'truecolor')
     try {
       const term = new FakeTerminal()
@@ -2340,12 +2344,13 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('promotes settled rows from a scrolled alternate screen before disposal', () => {
+  it('browses history on the main screen without hiding native scrollback', () => {
     const term = new FakeTerminal()
     term.rows = 10
     const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
       terminalProfile: 'direct',
       alternateScreenOverlays: true,
+      streamRenderMs: 0,
     })
     for (let index = 0; index < 20; index += 1) {
       tui.event(ev('user/message', {
@@ -2354,19 +2359,21 @@ describe('LocalTui (tty)', () => {
       }, index + 1))
     }
 
+    const beforeBrowse = term.captured.length
     press(term, '\x1b[5~')
-    expect(term.captured).toContain('\x1b[?1049h')
+    const browse = term.captured.slice(beforeBrowse)
+    expect(browse).not.toContain('\x1b[?1049h')
+    expect(browse).not.toContain('\x1b[3J')
+    expect(browse).toContain('later line')
     tui.event(ev('user/message', {
       source: { kind: 'user' },
       content: [{ type: 'text', text: 'SETTLED-WHILE-SCROLLED' }],
     }, 100))
+    expect(term.captured.slice(beforeBrowse)).not.toContain('SETTLED-WHILE-SCROLLED')
 
     const beforeRelease = term.captured.length
     tui.dispose()
-    const release = term.captured.slice(beforeRelease)
-    const exitAlt = release.indexOf('\x1b[?1049l')
-    expect(exitAlt).toBeGreaterThanOrEqual(0)
-    expect(release.slice(exitAlt)).toContain('SETTLED-WHILE-SCROLLED')
+    expect(term.captured.slice(beforeRelease)).not.toContain('\x1b[?1049l')
   })
 
   it('summarizes a streamed tool call on one line for a pending decision', () => {
