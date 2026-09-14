@@ -35,7 +35,7 @@ description: omdsh 键盘参考：composer 编辑、转录导航、会话生命�
 | `Ctrl+V` | 粘贴剪贴板文本或图片。 |
 | `Alt+C` | 复制当前提示。 |
 | `Ctrl+Alt+C` | 复制当前行。 |
-| `Ctrl+X` | 在 `$VISUAL` 或 `$EDITOR` 中编辑提示。 |
+| `Ctrl+G` | 在 `$VISUAL` 或 `$EDITOR` 中编辑提示。 |
 
 ## 转录
 
@@ -91,7 +91,7 @@ key id 用 `+` 连接修饰键（`ctrl`、`alt`、`shift`、`super`），具名�
 
 | Action id | 默认键 | 作用 |
 |---|---|---|
-| `external-editor` | `Ctrl+X` | 在 `$VISUAL` 或 `$EDITOR` 中编辑提示。 |
+| `external-editor` | `Ctrl+G` | 在 `$VISUAL` 或 `$EDITOR` 中编辑提示。 |
 | `retry` | `Alt+R` | 重试最近一条人类提示。 |
 | `paste-clipboard` | `Ctrl+V` | 粘贴剪贴板文本或图片。 |
 | `copy-prompt` | `Alt+C` | 复制当前提示。 |

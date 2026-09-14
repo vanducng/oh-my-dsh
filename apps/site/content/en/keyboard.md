@@ -35,7 +35,7 @@ description: "Keyboard reference for omdsh: composer editing, transcript navigat
 | `Ctrl+V` | Paste clipboard text or an image. |
 | `Alt+C` | Copy the current prompt. |
 | `Ctrl+Alt+C` | Copy the current line. |
-| `Ctrl+X` | Edit the prompt in `$VISUAL` or `$EDITOR`. |
+| `Ctrl+G` | Edit the prompt in `$VISUAL` or `$EDITOR`. |
 
 ## Transcript
 
@@ -91,7 +91,7 @@ Key ids join modifiers with `+` (`ctrl`, `alt`, `shift`, `super`) and spell name
 
 | Action id | Default key | Effect |
 |---|---|---|
-| `external-editor` | `Ctrl+X` | Edit the prompt in `$VISUAL` or `$EDITOR`. |
+| `external-editor` | `Ctrl+G` | Edit the prompt in `$VISUAL` or `$EDITOR`. |
 | `retry` | `Alt+R` | Run the most recent human prompt again. |
 | `paste-clipboard` | `Ctrl+V` | Paste clipboard text or an image. |
 | `copy-prompt` | `Alt+C` | Copy the current prompt. |
