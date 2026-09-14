@@ -5,7 +5,7 @@ import { DSH_COHORT, packedInstallOverrides } from './packed-install-overrides.m
 test('packedInstallOverrides pins identity packages and declared DSH deps to the cohort', () => {
   const overrides = packedInstallOverrides({
     dependencies: {
-      '@deepseek-ai/dsh-agent': '0.1.5-rc.1',
+      '@deepseek-ai/dsh-agent': '0.1.5-rc.2',
       '@vanducng/dsh-tui': 'workspace:^',
     },
   })

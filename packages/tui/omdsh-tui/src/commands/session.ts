@@ -15,6 +15,7 @@ import { formatPermission, formatTokens } from '../chrome/status-line.ts'
 import { formatAgentPreset } from '../session/session-configuration.ts'
 import { readPinnedSessions, sortSessionRows, togglePinnedSession, writePinnedSessions } from '../session/session-library.ts'
 import { contextDiagnosticsMarkdown } from '../session/context-diagnostics.ts'
+import { blocksText } from '../session/content-text.ts'
 
 export const name = 'omdsh-command-session'
 export const inject = ['commands', 'omdshSession', 'tui']
@@ -24,10 +25,7 @@ const SESSION_SEARCH_LIMIT = 20
 
 function humanText(event: SessionEvent): string | undefined {
   if (event.type !== 'user/message' || event.data.source.kind !== 'user') return undefined
-  const text = event.data.content
-    .filter((block): block is Extract<(typeof event.data.content)[number], { type: 'text' }> => block.type === 'text')
-    .map(block => block.text)
-    .join('\n')
+  const text = blocksText(event.data.content)
   return text === '' ? undefined : text
 }
 
@@ -57,6 +55,8 @@ async function resumeSession(ctx: Context, invocation: CommandInvocation): Promi
       const answer = await ctx.tui.prompt({
         title: 'Session Library',
         question: '',
+        // Filtering can empty the list even when the library is not empty.
+        emptyText: 'No sessions found.',
         options: recent.map(row => ({
           label: `${pinned.includes(row.id) ? '◆ ' : ''}${row.title}`,
           value: row.id,
@@ -148,6 +148,7 @@ async function searchSessions(ctx: Context, invocation: CommandInvocation): Prom
   const answer = await ctx.tui.prompt({
     title: 'Session Search',
     question: '',
+    emptyText: 'No session content matched.',
     options: hits.map(hit => ({
       label: titles.get(hit.header.id) ?? hit.bestMatch.snippet,
       value: hit.header.id,

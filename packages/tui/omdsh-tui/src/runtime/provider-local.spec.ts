@@ -15,6 +15,7 @@ import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { formatSessionReferenceMention } from '@deepseek-ai/dsh-session-reference'
 import { copyToClipboard } from '../input/clipboard.ts'
 import { LocalTui, type TerminalLike } from './provider-local.ts'
+import { HerdrAgentReporter, type HerdrRequest } from './herdr-agent.ts'
 import { initialTranscript, renderView } from '../views/event-views.ts'
 import { createHistorySearch } from '../views/history-search.ts'
 import type { DirEntry, PathSearcher, ProjectPathEntry } from '../views/path-complete.ts'
@@ -65,6 +66,17 @@ function ev(type: string, data: unknown, seq: number): SessionEvent {
 
 const press = (term: FakeTerminal, bytes: string): void => {
   term.input.write(bytes)
+}
+
+/** Herdr reporter over a recording transport, so no test touches the real socket. */
+function createHerdrRecorder(): { requests: HerdrRequest[]; reporter: HerdrAgentReporter } {
+  const requests: HerdrRequest[] = []
+  const reporter = new HerdrAgentReporter({
+    env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2', HERDR_SOCKET_PATH: '/tmp/omdsh-herdr-test.sock' },
+    transport: () => ({ send: request => { requests.push(request) } }),
+    now: () => 1_000,
+  })
+  return { requests, reporter }
 }
 
 function emulatedScreenRows(output: string): string[] {
@@ -303,7 +315,10 @@ describe('LocalTui (tty)', () => {
   it('keeps running tool previews off main scrollback through shrink and settlement', () => {
     const term = new FakeTerminal()
     term.rows = 8
-    const tui = new LocalTui(term, 'm', false)
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
+      terminalProfile: 'direct',
+      streamRenderMs: 0,
+    })
     term.captured = ''
 
     tui.event(ev('tool/call', {
@@ -362,7 +377,7 @@ describe('LocalTui (tty)', () => {
 
   it('clears and fully repaints after the terminal is resized', () => {
     const term = new FakeTerminal()
-    const tui = new LocalTui(term, 'm', false)
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { terminalProfile: 'direct' })
     const before = term.captured.length
 
     term.resize(42, 18)
@@ -1027,6 +1042,73 @@ describe('LocalTui (tty)', () => {
 
     expect(term.captured).toContain('omdsh needs attention: Output token limit reached after 0s')
     tui.dispose()
+  })
+
+  it('reports Herdr pane lifecycle through the injected reporter', async () => {
+    const term = new FakeTerminal()
+    const recorder = createHerdrRecorder()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { herdrReporter: recorder.reporter })
+
+    expect(recorder.requests[0]?.params.state).toBe('idle')
+
+    tui.setStatus('running')
+    expect(recorder.requests.at(-1)?.params.state).toBe('working')
+
+    const answer = tui.prompt({ title: 'Approval required', question: 'Allow bash once?' })
+    expect(recorder.requests.at(-1)?.params).toMatchObject({ state: 'blocked', message: 'Approval required' })
+
+    press(term, 'yes\r')
+    expect(await answer).toBe('yes')
+    expect(recorder.requests.at(-1)?.params.state).toBe('working')
+
+    tui.setSession({ id: 'herdr-session', recent: [] })
+    tui.setStatus('idle')
+    expect(recorder.requests.at(-1)?.params).toMatchObject({ state: 'idle', agent_session_id: 'herdr-session' })
+
+    tui.dispose()
+    expect(recorder.requests.at(-1)?.method).toBe('pane.release_agent')
+  })
+
+  it('ignores status updates from an inspected subagent while still reporting human prompts', async () => {
+    const term = new FakeTerminal()
+    const recorder = createHerdrRecorder()
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { herdrReporter: recorder.reporter })
+    tui.setStatus('running')
+    recorder.requests.length = 0
+
+    tui.setInspectedSubagent({ id: 'child-1', label: 'Explore', phase: 'running', writable: false })
+    tui.setStatus('idle')
+    expect(recorder.requests).toHaveLength(0)
+
+    // A human decision is pending even while the child transcript is shown.
+    const answer = tui.prompt({
+      title: 'Approval required',
+      question: 'Continue?',
+      options: [{ label: 'Allow once' }, { label: 'Reject' }],
+    })
+    expect(recorder.requests.at(-1)?.params).toMatchObject({ state: 'blocked', message: 'Approval required' })
+    press(term, '\r')
+    expect(await answer).toBe('Allow once')
+    expect(recorder.requests.at(-1)?.params.state).toBe('working')
+
+    tui.setInspectedSubagent(undefined)
+    tui.setStatus('idle')
+    expect(recorder.requests.at(-1)?.params.state).toBe('idle')
+    tui.dispose()
+  })
+
+  it('keeps the Herdr reporter inert without a pane environment', () => {
+    const term = new FakeTerminal()
+    const requests: HerdrRequest[] = []
+    const reporter = new HerdrAgentReporter({
+      env: {},
+      transport: () => ({ send: request => { requests.push(request) } }),
+    })
+    const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, { herdrReporter: reporter })
+    tui.setStatus('running')
+    void tui.prompt({ title: 'Approval required', question: 'Continue?' })
+    tui.dispose()
+    expect(requests).toHaveLength(0)
   })
 
   it('skips a footer repaint when only non-visible session timing changes', () => {
@@ -1908,6 +1990,121 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
+  it('keeps an unconfigured session colorless under NO_COLOR', () => {
+    vi.stubEnv('NO_COLOR', '1')
+    vi.stubEnv('COLORTERM', 'truecolor')
+    try {
+      const term = new FakeTerminal()
+      const tui = new LocalTui(term, 'm', undefined)
+      tui.notice('probe', { level: 'error' })
+
+      // The viewport still emits cursor and sync controls (`?2026h`, `2K`), so
+      // the no-color contract is the absence of every SGR sequence.
+      expect(term.captured).toContain('probe')
+      expect(term.captured).not.toMatch(/\x1b\[[0-9;]*m/u)
+      tui.dispose()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('lets an explicit color preference override NO_COLOR', () => {
+    vi.stubEnv('NO_COLOR', '1')
+    vi.stubEnv('COLORTERM', 'truecolor')
+    try {
+      const term = new FakeTerminal()
+      const tui = new LocalTui(term, 'm', true)
+      tui.notice('probe', { level: 'error' })
+
+      // NO_COLOR still suppresses 24-bit, but an explicit preference keeps SGR.
+      expect(term.captured).toContain('\x1b[31mprobe')
+      tui.dispose()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('treats an empty NO_COLOR as unset for an unconfigured session', () => {
+    vi.stubEnv('NO_COLOR', '')
+    vi.stubEnv('FORCE_COLOR', '')
+    vi.stubEnv('COLORTERM', 'truecolor')
+    try {
+      const term = new FakeTerminal()
+      const tui = new LocalTui(term, 'm', undefined)
+      tui.notice('probe', { level: 'error' })
+
+      expect(term.captured).toContain('\x1b[38;2;252;58;75mprobe')
+      tui.dispose()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('keeps an unconfigured session colorless on a piped output stream', () => {
+    vi.stubEnv('NO_COLOR', undefined)
+    vi.stubEnv('FORCE_COLOR', undefined)
+    try {
+      const term = new FakeTerminal()
+      term.output.isTTY = false
+      const tui = new LocalTui(term, 'm', undefined)
+      tui.notice('probe', { level: 'error' })
+
+      expect(term.captured).toContain('probe')
+      expect(term.captured).not.toMatch(/\x1b\[[0-9;]*m/u)
+      tui.dispose()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('repaints the settings overlay with color after the switch is toggled on', () => {
+    vi.stubEnv('COLORTERM', 'truecolor')
+    vi.stubEnv('NO_COLOR', undefined)
+    vi.stubEnv('FORCE_COLOR', undefined)
+    try {
+      const term = new FakeTerminal()
+      const tui = new LocalTui(term, 'm', false)
+      void tui.readline()
+      press(term, '/settings\r')
+      press(term, '\x1b[B')
+      // Dark accent is #febc38; a colorless session emits no SGR at all.
+      expect(term.captured).not.toContain('\x1b[38;2;254;188;56m')
+
+      // Row 1 is `Colors`; toggling it applies immediately, without a restart.
+      press(term, '\r')
+      expect(term.captured).toContain('\x1b[38;2;254;188;56m')
+      expect(term.captured).not.toContain('\x1b[33m')
+      tui.dispose()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('repaints notices with 24-bit color once settings turn color back on', () => {
+    // Pin the capability query so the assertion cannot inherit the runner's
+    // own terminal environment.
+    vi.stubEnv('COLORTERM', 'truecolor')
+    vi.stubEnv('NO_COLOR', undefined)
+    vi.stubEnv('FORCE_COLOR', undefined)
+    try {
+      const term = new FakeTerminal()
+      const tui = new LocalTui(term, 'm', false)
+      tui.notice('colorless', { level: 'error' })
+      expect(term.captured).not.toContain('\x1b[38;2;252;58;75m')
+      expect(term.captured).not.toContain('\x1b[31m')
+
+      tui.applyStoredPrefs({ theme: 'dark', colors: true, expandTools: false })
+      tui.notice('colorful', { level: 'error' })
+
+      // Dark `error` is #fc3a4b, so 16-color fallback would emit `31` instead.
+      expect(term.captured).toContain('\x1b[38;2;252;58;75mcolorful')
+      expect(term.captured).not.toContain('\x1b[31m')
+      tui.dispose()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('mirrors the folded session title into the terminal window title', () => {
     const term = new FakeTerminal()
     const tui = new LocalTui(term, 'm', false)
@@ -2147,12 +2344,13 @@ describe('LocalTui (tty)', () => {
     tui.dispose()
   })
 
-  it('promotes settled rows from a scrolled alternate screen before disposal', () => {
+  it('browses history on the main screen without hiding native scrollback', () => {
     const term = new FakeTerminal()
     term.rows = 10
     const tui = new LocalTui(term, 'm', false, 'dark', copyToClipboard, {
       terminalProfile: 'direct',
       alternateScreenOverlays: true,
+      streamRenderMs: 0,
     })
     for (let index = 0; index < 20; index += 1) {
       tui.event(ev('user/message', {
@@ -2161,19 +2359,34 @@ describe('LocalTui (tty)', () => {
       }, index + 1))
     }
 
+    const beforeBrowse = term.captured.length
     press(term, '\x1b[5~')
-    expect(term.captured).toContain('\x1b[?1049h')
+    const browse = term.captured.slice(beforeBrowse)
+    expect(browse).not.toContain('\x1b[?1049h')
+    expect(browse).not.toContain('\x1b[3J')
+    expect(browse).toContain('later line')
     tui.event(ev('user/message', {
       source: { kind: 'user' },
       content: [{ type: 'text', text: 'SETTLED-WHILE-SCROLLED' }],
     }, 100))
+    expect(term.captured.slice(beforeBrowse)).not.toContain('SETTLED-WHILE-SCROLLED')
 
     const beforeRelease = term.captured.length
     tui.dispose()
-    const release = term.captured.slice(beforeRelease)
-    const exitAlt = release.indexOf('\x1b[?1049l')
-    expect(exitAlt).toBeGreaterThanOrEqual(0)
-    expect(release.slice(exitAlt)).toContain('SETTLED-WHILE-SCROLLED')
+    expect(term.captured.slice(beforeRelease)).not.toContain('\x1b[?1049l')
+  })
+
+  it('summarizes a streamed tool call on one line for a pending decision', () => {
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    tui.event(ev('tool/call', { callId: 'call-9', name: 'bash', arguments: '{"command":"rm -rf build"}' }, 1))
+
+    const summary = tui.toolCallContext('call-9')
+    expect(summary).toContain('rm -rf build')
+    // The approval prompt renders its detail on a single row.
+    expect(summary).not.toContain('\n')
+    expect(tui.toolCallContext('never-streamed')).toBeUndefined()
+    tui.dispose()
   })
 
   it('expands tool output when expandTools pref is on', () => {
@@ -2238,6 +2451,90 @@ describe('LocalTui (tty)', () => {
     const collapsed = emulatedScreenRows(term.captured).slice(-term.rows).map(stripAnsi).join('\n')
     expect(collapsed).not.toContain('pref-line-29')
     tui.dispose()
+  })
+
+  it('does not render background activity, but keeps its details available in the Agent Hub', () => {
+    vi.useFakeTimers()
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    try {
+      const agent = { id: 'child', depth: 1, label: 'Worker', phase: 'running' as const, activity: [] }
+      tui.setSubagents({ agents: [agent] })
+      vi.advanceTimersByTime(8)
+      const width = vi.spyOn(term, 'width')
+      for (let index = 0; index < 120; index += 1) {
+        tui.setSubagents({ agents: [{ ...agent, activity: [{ text: `read file-${index}`, status: 'running' }] }] })
+      }
+      vi.advanceTimersByTime(8)
+      expect(width.mock.calls.length).toBe(0)
+      expect(term.captured).not.toContain('read file-')
+      press(term, '\x1ba')
+      press(term, '\t')
+      expect(term.captured).toContain('read file-119')
+      width.mockClear()
+      tui.setSubagents({ agents: [{ ...agent, activity: [{ text: 'read next-file', status: 'running' }] }] })
+      vi.advanceTimersByTime(8)
+      expect(width.mock.calls.length).toBeGreaterThan(0)
+      expect(term.captured).toContain('read next-file')
+    } finally {
+      tui.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it('coalesces settlement event renders while busy but keeps control events immediate', () => {
+    vi.useFakeTimers()
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    try {
+      tui.event(ev('turn/start', { turn: 1 }, 1))
+      const width = vi.spyOn(term, 'width')
+      for (let seq = 2; seq <= 10; seq += 1) {
+        tui.event(ev('step/start', { turn: 1, step: seq }, seq))
+        tui.event(ev('step/end', {}, seq + 100))
+      }
+      // Every settlement event coalesced into one pending stream render.
+      expect(width.mock.calls.length).toBe(0)
+      vi.advanceTimersByTime(8)
+      expect(width.mock.calls.length).toBe(1)
+      // Control events still paint at once even while the turn is running.
+      tui.event(ev('command/run', { commandId: 'c1', name: 'compact', source: { kind: 'user' } }, 200))
+      expect(width.mock.calls.length).toBe(2)
+      // turn/end flips status to idle, so the settle paint stays immediate.
+      tui.event(ev('command/done', { commandId: 'c1', kind: 'success' }, 201))
+      tui.event(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }, 202))
+      expect(width.mock.calls.length).toBeGreaterThanOrEqual(4)
+    } finally {
+      tui.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it('coalesces roster state changes and handles input without waiting for the roster timer', () => {
+    vi.useFakeTimers()
+    const term = new FakeTerminal()
+    const tui = new LocalTui(term, 'm', false)
+    try {
+      const width = vi.spyOn(term, 'width')
+      const agent = { id: 'child', depth: 1, label: 'Worker', activity: [] }
+      tui.setSubagents({ agents: [{ ...agent, phase: 'starting' }] })
+      tui.setSubagents({ agents: [{ ...agent, phase: 'running' }] })
+      tui.setSubagents({ agents: [{ ...agent, phase: 'waiting' }] })
+      expect(width.mock.calls.length).toBe(0)
+      vi.advanceTimersByTime(8)
+      expect(width.mock.calls.length).toBe(1)
+      expect(term.captured).toContain('Worker · Waiting')
+      tui.setSubagents({ agents: [{ ...agent, phase: 'completed' }] })
+      press(term, 'input')
+      expect(term.captured).toContain('input')
+      expect(term.captured).toContain('Worker · Done')
+      const renders = width.mock.calls.length
+      vi.advanceTimersByTime(8)
+      expect(width.mock.calls.length).toBe(renders)
+    } finally {
+      tui.dispose()
+      vi.useRealTimers()
+    }
   })
 
   it('focuses the task launcher with down and activates an agent through the hub', async () => {

@@ -8,9 +8,10 @@
  */
 
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-subagent'
 import type { TuiSubagentActivity, TuiSubagentPhase, TuiSubagentRoster, TuiSubagentView } from '../definition.ts'
+import { blocksText } from './content-text.ts'
+import { TOOL_ARG_FIELDS, toolArgsObject } from '../chrome/tool-args.ts'
 
 const ACTIVITY_LIMIT = 8
 
@@ -27,32 +28,8 @@ function asId(value: SessionId | string): string {
   return String(value)
 }
 
-function parseObject(raw: string): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(raw)
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? value as Record<string, unknown>
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
 function firstLine(value: string): string {
   return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')[0]?.trim() ?? ''
-}
-
-function contentText(content: unknown): string {
-  if (!Array.isArray(content)) return ''
-  return content
-    .flatMap((block) => {
-      if (block === null || typeof block !== 'object') return []
-      const item = block as { type?: unknown; text?: unknown }
-      return (item.type === 'text' || item.type === 'reasoning') && typeof item.text === 'string'
-        ? [item.text]
-        : []
-    })
-    .join('')
 }
 
 /** Short fallback when a child has no descriptor label or title yet. */
@@ -67,22 +44,15 @@ export function isSteerableSubagent(mode: TuiSubagentView['mode'] | undefined): 
 
 /** One-line child tool summary used by the roster and tests. */
 export function summarizeToolCall(name: string, raw: string): string {
-  const args = parseObject(raw)
+  const args = toolArgsObject(raw)
   if (args === undefined) return name
-  const command = typeof args.command === 'string' ? firstLine(args.command) : ''
-  if (command !== '') return `${name} ${command}`
-  const path = typeof args.path === 'string'
-    ? args.path
-    : typeof args.file_path === 'string' ? args.file_path : ''
-  if (path !== '') return `${name} ${path}`
-  const query = typeof args.pattern === 'string'
-    ? args.pattern
-    : typeof args.query === 'string'
-      ? args.query
-      : typeof args.description === 'string'
-        ? args.description
-        : typeof args.url === 'string' ? args.url : ''
-  return query === '' ? name : `${name} ${query}`
+  for (const field of TOOL_ARG_FIELDS) {
+    const value = args[field]
+    if (typeof value !== 'string') continue
+    const summary = field === 'command' ? firstLine(value) : value
+    if (summary !== '') return `${name} ${summary}`
+  }
+  return name
 }
 
 /**
@@ -178,7 +148,7 @@ export function applySubagentEvent(view: TuiSubagentView, event: SessionEvent): 
     }
     case 'user/message': {
       if (view.label !== shortSessionLabel(view.id)) return view
-      const text = firstLine(contentText(event.data.content))
+      const text = firstLine(blocksText(event.data.content, { kinds: ['text', 'reasoning'], join: '' }))
       if (text === '') return view
       return { ...view, label: text }
     }
@@ -221,22 +191,6 @@ export function applySubagentEvent(view: TuiSubagentView, event: SessionEvent): 
   }
 }
 
-/**
- * Fold one live `agent/assistant-stream` chunk into a roster row. Live chunks
- * are transient; the next event fold rehydrates from the durable log.
- */
-export function applySubagentDelta(view: TuiSubagentView, chunk: StreamChunk): TuiSubagentView {
-  if (chunk.type === 'tool-call-delta') {
-    const name = chunk.name ?? 'tool'
-    const activity = pushActivity(view.activity, { text: name, status: 'running' })
-    if (activity === view.activity && view.phase === 'running') return view
-    return { ...view, phase: 'running', activity }
-  }
-  const activity = pushActivity(view.activity, { text: 'thinking', status: 'thinking' })
-  if (activity === view.activity && view.phase === 'running') return view
-  return { ...view, phase: 'running', activity }
-}
-
 function emptyView(input: {
   id: string
   parentId?: string
@@ -268,10 +222,14 @@ function compareAgents(left: TuiSubagentView, right: TuiSubagentView): number {
 export class SubagentRoster {
   #rootId: string | undefined
   readonly #agents = new Map<string, TuiSubagentView>()
+  #positions = new WeakMap<Session, number>()
+  #snapshot: TuiSubagentRoster | undefined
 
   reset(rootId?: string): void {
     this.#rootId = rootId
     this.#agents.clear()
+    this.#positions = new WeakMap()
+    this.#snapshot = undefined
   }
 
   get rootId(): string | undefined {
@@ -291,7 +249,7 @@ export class SubagentRoster {
 
   snapshot(): TuiSubagentRoster | undefined {
     if (this.#agents.size === 0) return undefined
-    return { agents: [...this.#agents.values()].sort(compareAgents) }
+    return this.#snapshot ??= { agents: [...this.#agents.values()].sort(compareAgents) }
   }
 
   remember(input: {
@@ -305,6 +263,7 @@ export class SubagentRoster {
     const existing = this.#agents.get(input.id)
     if (existing === undefined) {
       const created = emptyView(input)
+      this.#snapshot = undefined
       this.#agents.set(input.id, created)
       return created
     }
@@ -325,6 +284,7 @@ export class SubagentRoster {
       ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
       ...(mode === undefined ? {} : { mode }),
     }
+    this.#snapshot = undefined
     this.#agents.set(input.id, next)
     return next
   }
@@ -385,20 +345,26 @@ export class SubagentRoster {
     }
     if (agentStatus === 'running' && view.phase !== 'error') view = { ...view, phase: 'running' }
     else if (agentStatus === 'idle' && view.phase === 'starting') view = { ...view, phase: 'waiting' }
+    this.#positions.set(session, Number(events.at(-1)?.seq ?? Number(session.inheritedEventCount) - 1))
+    this.#snapshot = undefined
     this.#agents.set(id, view)
     return view
   }
 
-  apply(session: Session, depth: number, _event: SessionEvent, agentStatus?: 'idle' | 'running'): TuiSubagentView {
-    return this.hydrate(session, depth, agentStatus)
-  }
-
-  /** Fold one live assistant stream chunk into an existing roster row. */
-  applyDelta(id: string, chunk: StreamChunk): TuiSubagentView | undefined {
-    const existing = this.#agents.get(id)
-    if (existing === undefined) return undefined
-    const next = applySubagentDelta(existing, chunk)
-    if (next !== existing) this.#agents.set(id, next)
+  /** Apply one durable event; only a new session or a sequence gap requires replay. */
+  apply(session: Session, depth: number, event: SessionEvent, agentStatus?: 'idle' | 'running'): TuiSubagentView {
+    const existing = this.#agents.get(asId(session.id))
+    const position = this.#positions.get(session)
+    if (existing === undefined || position === undefined || event.seq > position + 1) {
+      return this.hydrate(session, depth, agentStatus)
+    }
+    if (event.seq <= position) return existing
+    this.#positions.set(session, event.seq)
+    const folded = applySubagentEvent(existing, event)
+    if (folded === existing) return existing
+    const next = { ...folded, startedAt: existing.startedAt ?? event.time, updatedAt: event.time }
+    this.#snapshot = undefined
+    this.#agents.set(asId(session.id), next)
     return next
   }
 
@@ -407,7 +373,6 @@ export class SubagentRoster {
     if (existing === undefined) return undefined
     let phase: TuiSubagentPhase
     if (status === 'running') phase = 'running'
-    else if (status === 'idle') phase = existing.mode === 'one-shot' ? 'completed' : 'waiting'
     else if (stopError) phase = 'error'
     else if (existing.phase === 'error') phase = 'error'
     else if (existing.mode === 'one-shot') phase = 'completed'
@@ -417,6 +382,7 @@ export class SubagentRoster {
       : existing.activity
     if (phase === existing.phase && settled === existing.activity) return existing
     const next = { ...existing, phase, activity: settled }
+    this.#snapshot = undefined
     this.#agents.set(id, next)
     return next
   }

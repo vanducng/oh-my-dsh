@@ -16,9 +16,20 @@ export const tutorialEntries: NavEntry[] = [
 ]
 
 export const referenceEntries: NavEntry[] = [
+  { slug: 'commands', en: 'Commands', zh: '命令' },
+  { slug: 'keyboard', en: 'Keyboard and keys', zh: '键盘与快捷键' },
+  { slug: 'sessions', en: 'Sessions and history', zh: '会话与历史' },
+  { slug: 'subagents', en: 'Subagents and delegation', zh: '子智能体与委派' },
+  { slug: 'observability', en: 'Observability', zh: '可观测性' },
+  { slug: 'settings', en: 'Settings', zh: '设置' },
+  { slug: 'permissions', en: 'Permissions and access', zh: '权限与 Access' },
+  { slug: 'cli', en: 'Command line', zh: '命令行' },
+  { slug: 'tools', en: 'Tools', zh: '工具' },
+  { slug: 'troubleshooting', en: 'Troubleshooting', zh: '故障排查' },
   { slug: 'skills-and-mcp', en: 'Skills and MCP', zh: 'Skills 与 MCP' },
   { slug: 'language-servers', en: 'Language servers', zh: '语言服务器' },
   { slug: 'plugins', en: 'User plugins', zh: '用户插件' },
+  { slug: 'plugin-internals', en: 'Plugin internals', zh: '插件内部机制' },
   { slug: 'architecture', en: 'Architecture', zh: '架构' },
   { slug: 'performance', en: 'Performance', zh: '性能' },
 ]

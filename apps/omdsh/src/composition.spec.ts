@@ -216,9 +216,9 @@ describe('boot patch assembly', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { dependencies?: Record<string, string> }
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.5-rc.1')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.5-rc.1')
-    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.5-rc.1')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage']).toBe('0.1.5-rc.2')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-json']).toBe('0.1.5-rc.2')
+    expect(manifest.dependencies?.['@deepseek-ai/dsh-storage-domain']).toBe('0.1.5-rc.2')
   })
 
   it('updates the provider output fallback without replacing its model catalog', () => {
@@ -430,6 +430,24 @@ describe('dsh spine expansion', () => {
     expect(row('agent-loop')?.config).toEqual({ agents: [] })
     expect(row('skill-filesystem')?.config).toHaveProperty('dshHome')
     expect(row('shell-env')?.config).toHaveProperty('dshHome')
+  })
+
+  it('mounts the LLM title provider and the workspace storage chain', () => {
+    const rows = productRows()
+    const row = (id: string) => rows.find(entry => entry.id === id)
+    // The first-prompt provider is what turns the fallback label into a
+    // summarized title on the recent-session list and the harness web.
+    expect(row('session-title-llm')?.name).toBe('@deepseek-ai/dsh-session-title-first-prompt-llm')
+    // The registry's injects resolve through this exact mount chain; the
+    // order matters (backend before domain, domain before its consumers).
+    const chain = ['session-persistence', 'storage', 'storage-json', 'storage-domain', 'session-projection-cache', 'workspace']
+    const positions = chain.map(id => rows.findIndex(entry => entry.id === id))
+    for (const [i, id] of chain.entries()) {
+      expect(positions[i], `row ${id} mounted`).toBeGreaterThanOrEqual(0)
+      if (i > 0) expect(positions[i], `${id} mounts after ${chain[i - 1]}`).toBeGreaterThan(positions[i - 1]!)
+    }
+    expect(row('storage-json')?.config).toHaveProperty('root')
+    expect(row('storage-domain')?.config).toEqual({ backend: 'json' })
   })
 
   it('skips a spine-targeted home patch silently without breaking boot', () => {

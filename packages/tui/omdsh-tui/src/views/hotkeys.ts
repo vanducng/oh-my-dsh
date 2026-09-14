@@ -4,19 +4,39 @@
  */
 
 import { DEFAULT_KEYBINDINGS, type TuiAction } from '../input/keybindings-config.ts'
+import type { HotkeyRow, OverlayCatalog } from './hotkey-format.ts'
+
+export type { HotkeyRow }
+export { formatHotkeyKeys, formatOverlayHint } from './hotkey-format.ts'
+import { AGENT_HUB_HOTKEYS } from './agent-hub.ts'
+import { COPY_SELECTOR_HOTKEYS } from './copy-selector.ts'
+import { HISTORY_SEARCH_HOTKEYS } from './history-search.ts'
+import { PROMPT_SELECTOR_HOTKEYS } from './prompt-selector.ts'
+import { SETTINGS_HOTKEYS } from './settings-list.ts'
+import { TRAJECTORY_HOTKEYS } from './trajectory.ts'
+import { TRANSCRIPT_SEARCH_HOTKEYS } from './transcript-search.ts'
 
 /** Effective application bindings shown alongside built-in editor bindings. */
 export type HotkeyBindings = Readonly<Record<string, TuiAction>>
-
-interface HotkeyRow {
-  keys: string
-  action: string
-}
 
 interface HotkeySection {
   title: string
   rows: readonly HotkeyRow[]
 }
+
+/**
+ * Overlay catalogs in `/help` order. Each overlay view owns its own catalog, so
+ * this list only decides the order and the label the help table prints.
+ */
+const OVERLAY_CATALOGS: readonly OverlayCatalog[] = [
+  { label: 'Settings', rows: SETTINGS_HOTKEYS },
+  { label: 'Copy picker', rows: COPY_SELECTOR_HOTKEYS },
+  { label: 'Agent Hub', rows: AGENT_HUB_HOTKEYS },
+  { label: 'History search', rows: HISTORY_SEARCH_HOTKEYS },
+  { label: 'Transcript search', rows: TRANSCRIPT_SEARCH_HOTKEYS },
+  { label: 'Trajectory', rows: TRAJECTORY_HOTKEYS },
+  { label: 'Prompts', rows: PROMPT_SELECTOR_HOTKEYS },
+]
 
 function displayKey(key: string): string {
   return key.split('+').map((part) => {
@@ -82,6 +102,7 @@ function sections(bindings: HotkeyBindings): readonly HotkeySection[] {
         { keys: keysForActions(bindings, 'scroll-page-up', 'scroll-page-down'), action: 'Scroll one page' },
         { keys: keysForActions(bindings, 'scroll-fast-up', 'scroll-fast-down'), action: 'Scroll quickly' },
         { keys: keysForAction(bindings, 'toggle-tools'), action: 'Expand tool output or catalog descriptions' },
+        { keys: keysForAction(bindings, 'search-transcript'), action: 'Search the current transcript; n/N step across matches' },
         { keys: keysForAction(bindings, 'inspect-subagent'), action: 'Open a subagent transcript; continuable children can be steered' },
       ],
     },
@@ -104,6 +125,13 @@ function sections(bindings: HotkeyBindings): readonly HotkeySection[] {
         { keys: '/help', action: 'Show commands and keyboard shortcuts' },
       ],
     },
+    {
+      title: 'Overlays',
+      rows: OVERLAY_CATALOGS.flatMap(catalog => catalog.rows.map(row => ({
+        keys: row.keys,
+        action: `${catalog.label}: ${row.action}`,
+      }))),
+    },
   ]
 }
 
@@ -123,9 +151,10 @@ export function formatEssentialHotkeysText(bindings: HotkeyBindings = DEFAULT_KE
     { keys: 'Shift+Enter / Alt+Enter / Ctrl+J', action: 'Insert a new line' },
     { keys: 'Ctrl+C twice', action: 'Interrupt or clear, then exit' },
     { keys: 'Esc twice', action: 'Rewind to an earlier conversation turn' },
-    { keys: 'Ctrl+R', action: 'Search prompt history' },
-    { keys: 'PgUp / PgDn', action: 'Scroll the transcript' },
-    { keys: 'Ctrl+O', action: 'Expand tool output or catalog descriptions' },
+    { keys: keysForAction(bindings, 'search-history'), action: 'Search prompt history' },
+    { keys: keysForAction(bindings, 'search-transcript'), action: 'Search the current transcript' },
+    { keys: keysForActions(bindings, 'scroll-page-up', 'scroll-page-down'), action: 'Scroll the transcript' },
+    { keys: keysForAction(bindings, 'toggle-tools'), action: 'Expand tool output or catalog descriptions' },
     { keys: keysForAction(bindings, 'paste-clipboard'), action: 'Paste clipboard text or an image' },
   ]
   return rows.map(row => `- \`${tableCell(row.keys)}\` — ${tableCell(row.action)}`).join('\n')

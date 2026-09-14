@@ -27,6 +27,7 @@ import { BOX, SYMBOL, THEME_NAMES, type Theme, type ThemeColor, type ThemeName, 
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from '../chrome/width.ts'
 import type { TuiAgentBehaviorSettings } from '../definition.ts'
 import { MOTION_MODES, type MotionMode } from '../session/tui-settings.ts'
+import { formatOverlayHint, type HotkeyRow } from './hotkey-format.ts'
 
 /** One cycleable row in the overlay. */
 export interface SettingItem {
@@ -87,18 +88,19 @@ const AGENT_LANGUAGE_LABELS: Record<TuiAgentBehaviorSettings['language'], typeof
 const AGENT_LANGUAGE_IDS = Object.fromEntries(
   Object.entries(AGENT_LANGUAGE_LABELS).map(([id, label]) => [label, id]),
 ) as Record<typeof AGENT_LANGUAGE_VALUES[number], TuiAgentBehaviorSettings['language']>
+const STATUS_ITEM_CONTROLS = 'Left/Right sets color; Space shows or hides; Enter then arrows move it.'
 const STATUS_ITEM_COPY: Record<StatusItemId, { label: string; description: string; sample: string }> = {
-  model: { label: 'Model', description: 'Model name on the left of the first footer line. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'deepseek' },
-  effort: { label: 'Effort', description: 'Reasoning effort on the first footer line. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'max' },
-  path: { label: 'Path', description: 'Workspace path on the right of the first footer line. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: '~/project' },
-  git: { label: 'Git', description: 'Git branch on the right of the first footer line. A dirty worktree stays warning while color is default. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'main *1' },
-  session: { label: 'Session', description: 'Folded session title on the first footer line. Off by default; the terminal window title shows it regardless. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'Fix the parser' },
-  context: { label: 'Context', description: 'Context pressure as percentage and used/window tokens. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'Ctx 1.6% · 16.4K/1M' },
-  cache: { label: 'Cache', description: 'Prompt-cache hit rate. Cache-hit percentages stay on the success color. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'Cache 99%' },
-  tokens: { label: 'Tokens', description: 'Input and output token counts. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: '5.9M in' },
-  speed: { label: 'Latency', description: 'First-token latency and decode rate. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'TTFT 1.2s' },
-  durations: { label: 'Time', description: 'LLM and tool duration. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: 'LLM 16m51s' },
-  counts: { label: 'Activity', description: 'Turn and step counts. Left/Right sets color; Space shows or hides; Enter then arrows move it.', sample: '3 turns' },
+  model: { label: 'Model', description: `Model name on the left of the first footer line. ${STATUS_ITEM_CONTROLS}`, sample: 'deepseek' },
+  effort: { label: 'Effort', description: `Reasoning effort on the first footer line. ${STATUS_ITEM_CONTROLS}`, sample: 'max' },
+  path: { label: 'Path', description: `Workspace path on the right of the first footer line. ${STATUS_ITEM_CONTROLS}`, sample: '~/project' },
+  git: { label: 'Git', description: `Git branch on the right of the first footer line. A dirty worktree stays warning while color is default. ${STATUS_ITEM_CONTROLS}`, sample: 'main *1' },
+  session: { label: 'Session', description: `Folded session title on the first footer line. Off by default; the terminal window title shows it regardless. ${STATUS_ITEM_CONTROLS}`, sample: 'Fix the parser' },
+  context: { label: 'Context', description: `Context pressure as percentage and used/window tokens. ${STATUS_ITEM_CONTROLS}`, sample: 'Ctx 1.6% · 16.4K/1M' },
+  cache: { label: 'Cache', description: `Prompt-cache hit rate. Cache-hit percentages stay on the success color. ${STATUS_ITEM_CONTROLS}`, sample: 'Cache 99%' },
+  tokens: { label: 'Tokens', description: `Input and output token counts. ${STATUS_ITEM_CONTROLS}`, sample: '5.9M in' },
+  speed: { label: 'Latency', description: `First-token latency and decode rate. ${STATUS_ITEM_CONTROLS}`, sample: 'TTFT 1.2s' },
+  durations: { label: 'Time', description: `LLM and tool duration. ${STATUS_ITEM_CONTROLS}`, sample: 'LLM 16m51s' },
+  counts: { label: 'Activity', description: `Turn and step counts. ${STATUS_ITEM_CONTROLS}`, sample: '3 turns' },
 }
 
 function itemSwatch(id: StatusItemId, token: StatusColorToken): ThemeColor {
@@ -543,6 +545,42 @@ export function applySettingsEvent(state: SettingsState, event: KeyEvent): Setti
 /** First overlay-local row that paints a setting item. */
 export const SETTINGS_ITEM_ROW = 3
 
+// Every key `applySettingsEvent` accepts. Rows whose first word is the footer
+// label are also printed by the overlay's bottom hint.
+const HOTKEY_NAVIGATE: HotkeyRow = { keys: '↑↓', action: 'Navigate rows' }
+const HOTKEY_CHANGE: HotkeyRow = { keys: '←→', action: 'Change the selected value' }
+const HOTKEY_TOGGLE: HotkeyRow = { keys: 'Space', action: 'Toggle — show or hide a status item, or cycle other rows' }
+const HOTKEY_MOVE: HotkeyRow = { keys: 'Enter', action: 'Change — move a status item, or cycle other rows' }
+const HOTKEY_SECTION: HotkeyRow = { keys: 'Tab / Shift+Tab', action: 'Switch section' }
+const HOTKEY_EDGE: HotkeyRow = { keys: 'Home / End', action: 'Jump to the section edges' }
+const HOTKEY_CLOSE: HotkeyRow = { keys: 'Esc', action: 'Close the overlay' }
+const HOTKEY_CANCEL: HotkeyRow = { keys: 'Ctrl+C', action: 'Close the overlay, or place the grabbed item while moving' }
+const HOTKEY_ORDER: HotkeyRow = { keys: '↑↓', action: 'Order the grabbed item while moving' }
+const HOTKEY_COLUMN: HotkeyRow = { keys: '←→', action: 'Column — choose the footer side while moving' }
+const HOTKEY_PLACE: HotkeyRow = { keys: 'Enter / Esc', action: 'Place the grabbed item and stop moving' }
+
+/** Keys the settings overlay accepts; `/help` and its bottom hint read this list. */
+export const SETTINGS_HOTKEYS: readonly HotkeyRow[] = [
+  HOTKEY_NAVIGATE,
+  HOTKEY_CHANGE,
+  HOTKEY_TOGGLE,
+  HOTKEY_MOVE,
+  HOTKEY_SECTION,
+  HOTKEY_EDGE,
+  HOTKEY_CLOSE,
+  HOTKEY_CANCEL,
+  HOTKEY_ORDER,
+  HOTKEY_COLUMN,
+  HOTKEY_PLACE,
+]
+
+/** Bottom hint for the overlay; the grabbed-row state swaps in its own gestures. */
+function settingsHints(moving: boolean): string {
+  return moving
+    ? formatOverlayHint([HOTKEY_ORDER, HOTKEY_COLUMN, HOTKEY_PLACE])
+    : formatOverlayHint([HOTKEY_NAVIGATE, HOTKEY_CHANGE, HOTKEY_TOGGLE, HOTKEY_MOVE, HOTKEY_CLOSE])
+}
+
 function fit(text: string, width: number): string {
   if (width <= 0) return ''
   return padToWidth(truncateToWidth(text, width), width)
@@ -695,11 +733,7 @@ export function renderSettings(
     const text = descriptionLines[row] ?? ''
     lines.push(framedRow(theme, text === '' ? '' : '  ' + theme.fg('muted', text), width))
   }
-  const hints = theme.fg('dim', state.moving !== undefined
-    ? '↑↓ order · ←→ column · enter place · esc done'
-    : active === 'status'
-      ? '↑↓ navigate · ←→ change · space show/hide · enter move · tab section · esc close'
-      : '↑↓ navigate · ←→ change · enter change · tab section · esc close')
+  const hints = theme.fg('dim', settingsHints(state.moving !== undefined))
   lines.push(framedRow(theme, hints, width), bottomBorder(theme, width))
   return {
     lines,

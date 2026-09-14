@@ -7,8 +7,19 @@ The CLI package is [@vanducng/oh-my-dsh](https://www.npmjs.com/package/@vanducng
 ## Docs
 
 - [Tutorials](https://vanducng.github.io/oh-my-dsh/docs/tutorials/): install, first task, context, queued turns, long sessions, environment, Skills, MCP, and plugins
+- [Commands](https://vanducng.github.io/oh-my-dsh/docs/commands/): the complete slash-command reference
+- [Keyboard and keys](https://vanducng.github.io/oh-my-dsh/docs/keyboard/): editing, overlays, and keybindings.json
+- [Sessions and history](https://vanducng.github.io/oh-my-dsh/docs/sessions/): durable logs, the Session Library, and local data files
+- [Subagents and delegation](https://vanducng.github.io/oh-my-dsh/docs/subagents/): transports, the Agent Hub, and background jobs
+- [Observability](https://vanducng.github.io/oh-my-dsh/docs/observability/): the trajectory ledger, context usage, and diffs
+- [Settings](https://vanducng.github.io/oh-my-dsh/docs/settings/): appearance, motion, notifications, and the status line
+- [Permissions and access](https://vanducng.github.io/oh-my-dsh/docs/permissions/): access presets, sandbox, and approvals
+- [Command line](https://vanducng.github.io/oh-my-dsh/docs/cli/): flags, subcommands, and environment variables
+- [Tools](https://vanducng.github.io/oh-my-dsh/docs/tools/): what the model can use, grouped by capability
+- [Troubleshooting](https://vanducng.github.io/oh-my-dsh/docs/troubleshooting/): exit, color, scrollback, and boot failures
 - [Skills and MCP](https://vanducng.github.io/oh-my-dsh/docs/skills-and-mcp/): reusable instructions and external tools
 - [User plugins](https://vanducng.github.io/oh-my-dsh/docs/plugins/): install DSH bundles with `omdsh plugin`
+- [Plugin internals](https://vanducng.github.io/oh-my-dsh/docs/plugin-internals/): the ctx.tui surface and the planned contribution layer
 - [Architecture](https://vanducng.github.io/oh-my-dsh/docs/architecture/): plugin boundaries and runtime data flow
 - [Performance](https://vanducng.github.io/oh-my-dsh/docs/performance/): TUI benchmarks and rendering methodology
 - [Changelog](https://vanducng.github.io/oh-my-dsh/changelog/): user-visible releases

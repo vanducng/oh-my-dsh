@@ -41,6 +41,19 @@
       fallbackMaxBytes: 80
       maxTitleBytes: 120
 
+  # LLM title provider over the first prompt — the row the harness base ships,
+  # so omdsh sessions get a summarized title instead of the deterministic
+  # fallback (first words or the cwd basename) that the recent-session list
+  # and the web sidebar currently show.
+  - id: session-title-llm
+    name: '@deepseek-ai/dsh-session-title-first-prompt-llm'
+    config:
+      targetWords: 5
+      targetCjkCharacters: 10
+      maxInputBytes: 4096
+      maxOutputTokens: 64
+      timeoutMs: 60000
+
   - id: session-stats
     name: '@deepseek-ai/dsh-session-stats'
 
@@ -56,23 +69,12 @@
   - id: session-reference
     name: '@deepseek-ai/dsh-session-reference'
 
-  # Workspace @file discovery. The TUI owns mention syntax; this provider
-  # ranks path-only candidates and, when `read` is visible, adds the stable
-  # file-reference instruction. Selecting a row still inserts a path.
-  - id: file-reference
-    name: '@deepseek-ai/dsh-file-reference-local'
-
-  - id: attachments
-    name: '@deepseek-ai/dsh-attachment-local'
-    config:
-      dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
-
-
-  # Plugin-facing storage facility, mounted at the harness release omdsh pins
-  # so out-of-tree plugins share one instance instead of installing their own.
-  # Bare `$OMDSH_HOME/omdsh/plugins.yml` rows (for example dsh-observe) consume
-  # `storageDomain` from this product bundle; they do not apply their own
-  # bundle patch.
+  # Durable KV stack plus the workspace registry. The same storage instance
+  # also serves out-of-tree plugins (`$OMDSH_HOME/omdsh/plugins.yml` rows such
+  # as dsh-observe consume `storageDomain` from this product bundle). The
+  # registry groups sessions by canonical cwd; omdsh attaches each session it
+  # creates so grouped surfaces can file it. The storage root follows the
+  # session store so both read the same home.
   - id: storage
     name: '@deepseek-ai/dsh-storage'
 
@@ -85,6 +87,29 @@
     name: '@deepseek-ai/dsh-storage-domain'
     config:
       backend: json
+
+  # Durable projection checkpoints — the piece that lets a cold session
+  # answer its title without reading its log. Without it the `@` session
+  # menu and the recent-session list can only label cold sessions by id.
+  - id: session-projection-cache
+    name: '@deepseek-ai/dsh-session-projection-cache'
+    config:
+      writeEveryEvents: 200
+      writeIntervalMs: 5000
+
+  - id: workspace
+    name: '@deepseek-ai/dsh-workspace'
+
+  # Workspace @file discovery. The TUI owns mention syntax; this provider
+  # ranks path-only candidates and, when `read` is visible, adds the stable
+  # file-reference instruction. Selecting a row still inserts a path.
+  - id: file-reference
+    name: '@deepseek-ai/dsh-file-reference-local'
+
+  - id: attachments
+    name: '@deepseek-ai/dsh-attachment-local'
+    config:
+      dshHome: !!js process.env.OMDSH_HOME || process.env.DSH_HOME || undefined
 
   # User settings document ($DSH_HOME/settings.yaml) and credential sources
   # (inherited env, managed .credentials.yaml, project/user .env) — the same
@@ -205,6 +230,14 @@
   # tool-skill 注册（两者都以 session 前缀消息注入，注册顺序即渲染顺序）。
   - id: system-prompt
     name: '@deepseek-ai/dsh-system-prompt'
+    config:
+      # Renders as the `deployment:persona-suffix` section — the last prompt
+      # section, right above the tool catalog. The delegation tools differ in
+      # transport, and the in-process ones share this session's event loop:
+      # without routing guidance the model has no reason to ever pick
+      # `subagent_isolated`, so heavy parallel delegation starves rendering.
+      personaSuffix: |
+        Delegation routing: `subagent` and `subagent_fork` run the child in this process — the child stays steerable through `send_message` and continuable after it settles, but every in-process child shares the interactive session's capacity. `subagent_isolated` runs the child in a separate process: one-shot, no steering, no follow-up, and the host session stays responsive under heavy or parallel delegation. Prefer `subagent_isolated` when dispatching several independent tasks at once or a single heavyweight self-contained task; use `subagent` when steering or continuation matters, and `subagent_fork` when the task builds on this conversation's completed turns.
 
   - id: tools
     name: '@deepseek-ai/dsh-tools'

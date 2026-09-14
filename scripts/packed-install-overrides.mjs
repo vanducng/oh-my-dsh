@@ -1,12 +1,12 @@
 /**
  * npm overrides for a packed CLI install. Exact DSH pins in this repo do not
- * stop npm from hoisting a newer `^0.1.5-rc.1` peer (`0.1.5-rc.2` today) next
- * to the nested 0.1.5-rc.1 copy. Two `dsh-scope` packages mean `createScope`
+ * stop npm from hoisting a newer `^0.1.5-rc.2` peer next to the nested
+ * 0.1.5-rc.2 copy. Two `dsh-scope` packages mean `createScope`
  * and `systemPrompt.section()` disagree, so a preset persona registers on the
  * host and collides with `deployment:persona-prefix`.
  */
 
-export const DSH_COHORT = '0.1.5-rc.1'
+export const DSH_COHORT = '0.1.5-rc.2'
 
 export const CORDIS_COHORT = {
   '@deepseek-ai/cordis': '4.0.2',

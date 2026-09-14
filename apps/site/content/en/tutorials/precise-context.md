@@ -37,7 +37,7 @@ These checks apply at paste and storage time; the vision model applies its own i
 
 ### Write structured prompts
 
-Use `Shift+Enter`, `Alt+Enter`, or `Ctrl+J` for a newline. For a longer request, press `Ctrl+X` to edit the current draft in `$VISUAL` or `$EDITOR`; leaving the editor returns the text to the composer.
+Use `Shift+Enter`, `Alt+Enter`, or `Ctrl+J` for a newline. For a longer request, press `Ctrl+G` to edit the current draft in `$VISUAL` or `$EDITOR`; leaving the editor returns the text to the composer.
 
 ```text
 Goal: remove the duplicate loading row.

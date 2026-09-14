@@ -31,6 +31,7 @@ import type {} from '@deepseek-ai/dsh-plan-mode'
 import type { PlanProjection } from '@deepseek-ai/dsh-plan-mode/types'
 import { isUserInvocable, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import type {} from '@deepseek-ai/dsh-workspace'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats/types'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import { readColdSessionLog } from '@deepseek-ai/dsh-session-query'
@@ -47,6 +48,7 @@ import type { ToolPresentationMode } from '@deepseek-ai/dsh-tools'
 import type { StreamDelta } from '../views/event-views.ts'
 import { firstVisibleStreamTime } from '../views/stream-time.ts'
 import { LiveAttemptTracker } from './live-attempt-tracker.ts'
+import { blocksText } from './content-text.ts'
 import { jobNoticeFor } from './job-notice.ts'
 import type {
   TuiCommand,
@@ -59,7 +61,8 @@ import type {
   TuiSubmission,
   TuiInputImage,
 } from '../definition.ts'
-import { descendantDepth, isSteerableSubagent, SubagentRoster } from './subagent-roster.ts'
+import { descendantDepth, isSteerableSubagent } from './subagent-roster.ts'
+import { SubagentTracker } from './subagent-tracker.ts'
 import type {} from '../runtime/tool-presentation.ts'
 import { commandPermission } from '../commands/permission.ts'
 import {
@@ -325,12 +328,7 @@ function explicitSessionTitle(events: readonly SessionEvent[]): string | undefin
 
 function humanMessageText(event: SessionEvent): string | undefined {
   if (event.type !== 'user/message' || event.data.source.kind !== 'user') return undefined
-  const text = event.data.content
-    .filter((block): block is Extract<(typeof event.data.content)[number], { type: 'text' }> => block.type === 'text')
-    .map(block => block.text)
-    .join(' ')
-    .replace(/\s+/gu, ' ')
-    .trim()
+  const text = blocksText(event.data.content, { collapse: true })
   return text === '' ? undefined : text
 }
 
@@ -363,12 +361,7 @@ export function conversationTurns(events: readonly SessionEvent[]): Conversation
       continue
     }
     if (open === undefined || event.type !== 'user/message' || event.data.source.kind !== 'user') continue
-    const text = event.data.content
-      .filter((block): block is Extract<(typeof event.data.content)[number], { type: 'text' }> => block.type === 'text')
-      .map(block => block.text)
-      .join('\n')
-      .replace(/\s+/gu, ' ')
-      .trim()
+    const text = blocksText(event.data.content, { collapse: true })
     const imageCount = event.data.content.filter(block => block.type === 'image').length
     if (text === '' && imageCount === 0) continue
     turns.push({
@@ -470,10 +463,7 @@ export async function restoreSubmissionMessage(
   message: UserMessage,
   attachments?: RestoreAttachmentStore,
 ): Promise<TuiSubmission> {
-  const text = message.content
-    .filter((block): block is Extract<(typeof message.content)[number], { type: 'text' }> => block.type === 'text')
-    .map(block => block.text)
-    .join('\n')
+  const text = blocksText(message.content)
   const refs = message.content
     .filter((block): block is Extract<(typeof message.content)[number], { type: 'image' }> => block.type === 'image')
     .map(block => block.attachment)
@@ -507,12 +497,11 @@ export class SessionRuntime {
   readonly #releasedHandles = new WeakSet<AgentHandle>()
   #disposed = false
   readonly #off: Array<() => void> = []
-  readonly #subagents = new SubagentRoster()
+  readonly #tracker: SubagentTracker
   readonly #streamAttempts = new LiveAttemptTracker()
   readonly #recentCache = new Map<string, { revision: string; row: TuiRecentSession }>()
   #refreshInFlight: Promise<void> | null = null
   #refreshDirty = false
-  #subagentEpoch = 0
   #inspectEpoch = 0
   #activationEpoch = 0
   #inspectedId: string | undefined
@@ -520,6 +509,21 @@ export class SessionRuntime {
   constructor(ctx: Context, tui: TuiService) {
     this.#ctx = ctx
     this.#tui = tui
+    this.#tracker = new SubagentTracker({
+      rootId: () => this.#active?.handle.agent.id,
+      depth: (session) => {
+        const rootId = this.#active?.handle.agent.id
+        return rootId === undefined ? undefined : descendantDepth(session, rootId, this.#lookupSession)
+      },
+      agentStatus: id => this.#ctx.get('agents')?.get(SessionId(id))?.status,
+      sessions: () => this.#ctx.get('sessions')?.list() ?? [],
+      listChildren: rootId => this.#ctx.get('subagents')?.listChildren(SessionId(rootId)),
+      publish: (roster) => {
+        this.#tui.setSubagents(roster)
+        if (this.#inspectedId === undefined) return
+        this.#tui.setInspectedSubagent(this.#inspectView(this.#inspectedId))
+      },
+    })
     this.#off.push(tui.onInspectSubagent(id => { void this.#inspectSubagent(id) }))
     this.#off.push(tui.onInspectClose(() => { this.#closeInspect() }))
     this.#off.push(tui.onInspectSubmit(submission => { void this.#steerInspected(submission) }))
@@ -558,15 +562,13 @@ export class SessionRuntime {
         return
       }
       if (payload.agent.id === this.#inspectedId) tui.setStatus(payload.status)
-      this.#noteSubagentStatus(payload.agent.session, payload.status)
+      this.#tracker.noteStatus(payload.agent.session, payload.status)
     }))
     this.#off.push(ctx.on('session/created', (session) => {
-      this.#noteSubagentSession(session)
+      this.#tracker.noteSession(session)
     }))
     this.#off.push(ctx.on('session/disposed', (session) => {
-      if (!this.#subagents.owns(session.id)) return
-      this.#subagents.setAgentStatus(session.id, 'gone')
-      this.#pushSubagents()
+      this.#tracker.noteGone(session)
     }))
     this.#off.push(ctx.on('session/event', (session, event) => {
       const active = this.#active
@@ -574,19 +576,19 @@ export class SessionRuntime {
       if (session.id === this.#inspectedId) {
         const child = ctx.get('agents')?.get(session.id)
         tui.event(event, child === undefined ? undefined : ctx.get('tuiToolPresentation')?.event(child, event))
-        this.#noteSubagentEvent(session, event)
+        this.#tracker.noteEvent(session, event)
         return
       }
       if (session === active.handle.agent.session) {
         if (this.#inspectedId === undefined) {
           tui.event(event, ctx.get('tuiToolPresentation')?.event(active.handle.agent, event))
         }
-        if (event.type === 'subagent/catalog') this.#observeCatalogChildren(session, [event])
+        if (event.type === 'subagent/catalog') this.#tracker.observeCatalog(session, [event])
         if (shouldRefreshSessionInfoAfter(event)) this.#pushSessionInfo()
         if (event.type === 'session/title') void this.refreshRecent()
         return
       }
-      this.#noteSubagentEvent(session, event)
+      this.#tracker.noteEvent(session, event)
     }))
     // Format v2 moved live assistant increments off the session log. The
     // durable `session/event` firehose now carries only settlements; chunk
@@ -858,10 +860,7 @@ export class SessionRuntime {
     if (message?.type !== 'user/message' || message.data.source.kind !== 'user') {
       throw new Error('The selected conversation turn is no longer available.')
     }
-    const text = message.data.content
-      .filter((block): block is Extract<(typeof message.data.content)[number], { type: 'text' }> => block.type === 'text')
-      .map(block => block.text)
-      .join('\n')
+    const text = blocksText(message.data.content)
     const imageRefs = message.data.content
       .filter((block): block is Extract<(typeof message.data.content)[number], { type: 'image' }> => block.type === 'image')
       .map(block => block.attachment)
@@ -1062,10 +1061,9 @@ export class SessionRuntime {
   async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
-    this.#subagentEpoch += 1
     this.#activationEpoch += 1
     this.#inspectedId = undefined
-    this.#subagents.reset()
+    this.#tracker.reset()
     this.#tui.setInspectedSubagent(undefined)
     this.#tui.setSubagents(undefined)
     this.#tui.setSessionSearch()
@@ -1130,6 +1128,26 @@ export class SessionRuntime {
     }
   }
 
+  /**
+   * Claim the activated session into the cwd workspace so grouped session
+   * surfaces (the harness web sidebar) file it instead of leaving it
+   * ungrouped. Best-effort like `#resolveModelInfo`: the registry is an
+   * optional service and a failed claim must not disturb activation.
+   */
+  async #claimWorkspace(active: ActiveSession): Promise<void> {
+    const registry = this.#ctx.get('workspaceRegistry')
+    if (registry === undefined) return
+    try {
+      const { session } = active.handle.agent
+      const cwd = session.header.cwd
+      if (cwd === undefined) return
+      const workspace = await registry.resolveByPath(cwd) ?? await registry.create(cwd)
+      await workspace.attachSession(session.id)
+    } catch {
+      // The workspace claim is cosmetic interop; the session itself is fine.
+    }
+  }
+
   async #resolveModelInfo(selection: ModelSelection): Promise<LlmResolvedModelInfo | undefined> {
     try {
       return await this.#ctx.get('llm')?.resolveModelInfo(selection.provider, selection.model)
@@ -1148,6 +1166,7 @@ export class SessionRuntime {
     const previous = this.#active
     const epoch = ++this.#activationEpoch
     this.#active = next
+    void this.#claimWorkspace(next)
     try {
       this.#presentAgent(next)
       const selected = this.selection(next.handle.agent)
@@ -1209,7 +1228,7 @@ export class SessionRuntime {
     this.#inspectedId = undefined
     this.#tui.setInspectedSubagent(undefined)
     this.#tui.setStatus(agent.status)
-    this.#syncSubagents()
+    this.#tracker.sync()
     // Seed welcome metadata before replaceSession commits the startup header to
     // native scrollback; later updates cannot rewrite that frozen first frame.
     this.#pushSessionInfo()
@@ -1282,46 +1301,7 @@ export class SessionRuntime {
 
   #lookupSession = (id: string): Session | undefined => this.#ctx.get('sessions')?.get(SessionId(id))
 
-  #subagentDepth(session: Session): number | undefined {
-    const rootId = this.#active?.handle.agent.id
-    if (rootId === undefined) return undefined
-    return descendantDepth(session, rootId, this.#lookupSession)
-  }
-
-  #noteSubagentSession(session: Session): void {
-    const depth = this.#subagentDepth(session)
-    if (depth === undefined) return
-    const parentId = session.header.parentSession
-    this.#subagents.remember({
-      id: session.id,
-      ...(parentId === undefined ? {} : { parentId }),
-      depth,
-      phase: this.#ctx.get('agents')?.get(session.id)?.status === 'running' ? 'running' : 'starting',
-    })
-    this.#pushSubagents()
-  }
-
-  #noteSubagentEvent(session: Session, event: SessionEvent): void {
-    const depth = this.#subagentDepth(session)
-    if (depth === undefined) return
-    this.#subagents.apply(session, depth, event, this.#ctx.get('agents')?.get(session.id)?.status)
-    this.#pushSubagents()
-  }
-
-  /**
-   * Add the direct children a Session's durable catalog declares.
-   *
-   * The live roster is built from `session/created` and child events, so a
-   * resumed parent would otherwise show nothing: its children are neither
-   * loaded nor replayed. Catalog facts are durable, so a restored roster still
-   * lists those children, and `#inspectSubagent` opens each transcript from
-   * disk. Children the live path already knows keep their own state.
-   */
-  #observeCatalogChildren(session: Session, events: readonly SessionEvent[]): void {
-    if (this.#subagents.observeCatalog(session.id, events)) this.#pushSubagents()
-  }
-
-  /** Route one live assistant stream chunk to the visible transcript or the subagent roster. */
+  /** Route live output only to the visible session; background frames remain buffered for inspection. */
   #forwardLiveDelta(agent: Agent, delta: StreamDelta): void {
     const active = this.#active
     if (active !== undefined && agent.session.id === active.handle.agent.session.id) {
@@ -1332,7 +1312,6 @@ export class SessionRuntime {
       this.#tui.streamDelta(delta)
       return
     }
-    if (this.#subagents.applyDelta(agent.session.id, delta.chunk) !== undefined) this.#pushSubagents()
   }
 
   /**
@@ -1348,54 +1327,8 @@ export class SessionRuntime {
     }
   }
 
-  #noteSubagentStatus(session: Session, status: 'idle' | 'running'): void {
-    if (this.#subagents.owns(session.id)) {
-      this.#subagents.setAgentStatus(session.id, status)
-      this.#pushSubagents()
-      return
-    }
-    const depth = this.#subagentDepth(session)
-    if (depth === undefined) return
-    this.#subagents.hydrate(session, depth, this.#ctx.get('agents')?.get(session.id)?.status ?? status)
-    this.#pushSubagents()
-  }
-
-  #syncSubagents(): void {
-    const root = this.#active?.handle.agent
-    const epoch = this.#subagentEpoch + 1
-    this.#subagentEpoch = epoch
-    if (root === undefined) {
-      this.#subagents.reset()
-      this.#tui.setSubagents(undefined)
-      return
-    }
-    this.#subagents.reset(root.id)
-    for (const session of this.#ctx.get('sessions')?.list() ?? []) {
-      const depth = descendantDepth(session, root.id, this.#lookupSession)
-      if (depth === undefined) continue
-      this.#subagents.hydrate(session, depth, this.#ctx.get('agents')?.get(session.id)?.status)
-    }
-    this.#pushSubagents()
-    const listed = this.#ctx.get('subagents')?.listChildren(root.id)
-    if (listed === undefined) return
-    void listed.then((entries) => {
-      if (epoch !== this.#subagentEpoch || this.#active?.handle.agent !== root) return
-      for (const entry of entries) {
-        if (entry.kind !== 'child') continue
-        this.#subagents.remember({
-          id: entry.id,
-          depth: 1,
-          mode: entry.mode,
-          ...(entry.label === undefined ? {} : { label: entry.label }),
-          phase: entry.activity === 'running' ? 'running' : 'waiting',
-        })
-      }
-      this.#pushSubagents()
-    }, () => undefined)
-  }
-
   #inspectView(id: string, fallbackPhase: TuiInspectedSubagent['phase'] = 'waiting'): TuiInspectedSubagent {
-    const view = this.#subagents.snapshot()?.agents.find(agent => agent.id === id)
+    const view = this.#tracker.snapshot()?.agents.find(agent => agent.id === id)
     const mode = view?.mode
     return {
       id,
@@ -1406,23 +1339,20 @@ export class SessionRuntime {
     }
   }
 
-  #pushSubagents(): void {
-    this.#tui.setSubagents(this.#subagents.snapshot())
-    if (this.#inspectedId === undefined) return
-    this.#tui.setInspectedSubagent(this.#inspectView(this.#inspectedId))
-  }
-
   #pushSessionInfo(): void {
     const active = this.#active
     if (active === undefined) return
     const agent = active.handle.agent
     const projection = this.#projection(active)
-    const title = explicitSessionTitle(agent.session.snapshotEvents())
+    // One snapshot feeds both folds; each append invalidates the session's
+    // cached snapshot, so a second call would pay another O(log) copy.
+    const events = agent.session.snapshotEvents()
+    const title = explicitSessionTitle(events)
     this.#tui.setSession({
       id: agent.id,
       ...(title === undefined ? {} : { title }),
       recent: this.#recent.filter(row => row.id !== agent.id),
-      stats: this.#stats(active, projection),
+      stats: sessionStats(events, active.contextWindow, projection),
       controls: this.#sessionControls(active, projection),
     })
   }
@@ -1444,7 +1374,7 @@ export class SessionRuntime {
 
   #replaceTranscript(agent: Agent): void {
     const events = agent.session.snapshotEvents()
-    this.#observeCatalogChildren(agent.session, events)
+    this.#tracker.observeCatalog(agent.session, events)
     this.#tui.replaceSession(events, this.#ctx.get('tuiToolPresentation')?.session(agent, events), agent.status)
     this.#replayLivePrefix(agent.session.id)
   }
@@ -1472,7 +1402,7 @@ export class SessionRuntime {
   async #inspectSubagent(id: string): Promise<void> {
     const request = this.#inspectEpoch + 1
     this.#inspectEpoch = request
-    if (!this.#subagents.owns(id)) {
+    if (!this.#tracker.owns(id)) {
       this.#tui.notice('That subagent is no longer available.', { level: 'error' })
       return
     }
@@ -1523,7 +1453,7 @@ export class SessionRuntime {
       return
     }
     const live = this.#ctx.get('sessions')?.get(SessionId(childId))
-    const rosterParent = this.#subagents.snapshot()?.agents.find(agent => agent.id === childId)?.parentId
+    const rosterParent = this.#tracker.snapshot()?.agents.find(agent => agent.id === childId)?.parentId
     const parentId = live?.header.parentSession ?? rosterParent
     const parent = parentId === undefined || parentId === root.id
       ? root

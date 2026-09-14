@@ -108,6 +108,21 @@ describe('process-isolated subagent transport', () => {
     expect(row('tool-subagent').config?.backgroundMode).toBe('continuable')
   })
 
+  it('tells the model when to pick the isolated transport', () => {
+    // The tool descriptions are identical across providers, so the persona
+    // suffix is the only place that states the routing rule.
+    const prompt = row('system-prompt')
+    const suffix = prompt.config?.personaSuffix
+    expect(suffix).toBeTypeOf('string')
+    for (const tool of ['subagent_isolated', 'subagent', 'subagent_fork']) {
+      expect(String(suffix), `personaSuffix names ${tool}`).toContain(tool)
+    }
+    // The routing rule's actual content: isolated for parallel/heavy
+    // self-contained work, in-process when steering or continuation matters.
+    expect(String(suffix)).toMatch(/prefer `subagent_isolated`/iu)
+    expect(String(suffix)).toMatch(/one-shot/iu)
+  })
+
   it('configures the isolated tool for the capabilities ACP actually has', () => {
     const config = row('tool-subagent-isolated').config ?? {}
     // A numeric depth cap is refused, because the provider cannot enforce
@@ -132,10 +147,11 @@ describe('process-isolated subagent transport', () => {
     // Resolve the expression the loader will evaluate, against a parent home
     // that deliberately sits inside this run's temp root.
     const home = temp('omdsh-subagent-resolve-')
-    const resolved = String(evalExpr(env.DSH_HOME, { OMDSH_HOME: home, HOME: '/home/example' }))
-    // The composition joins with `/` (same as sessions/storages). Node accepts
-    // that mix on Windows; do not require path.join's native separator.
-    expect(resolved.replaceAll('\\', '/')).toBe(`${home.replaceAll('\\', '/')}/acp-child`)
+    const resolved = evalExpr(env.DSH_HOME, { OMDSH_HOME: home, HOME: '/home/example' })
+    // The expression appends '/acp-child', which Node accepts on Windows too;
+    // compare under one separator so the assertion is host-independent.
+    const posix = (value: unknown): string => String(value).replace(/\\/gu, '/')
+    expect(posix(resolved)).toBe(posix(join(home, 'acp-child')))
     // Never the parent home itself: that would defeat the isolation.
     expect(resolved).not.toBe(home)
   })
