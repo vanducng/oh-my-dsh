@@ -1,7 +1,7 @@
 {
   "name": "@vanducng/oh-my-dsh",
   "description": "omdsh: TUI coding agent command over the DeepSeek Harness runtime",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "homepage": "https://github.com/vanducng/oh-my-dsh#readme",
   "repository": {
     "type": "git",
@@ -170,7 +170,6 @@
     "@deepseek-ai/dsh-web-fetch-http": "0.1.5-rc.2",
     "@deepseek-ai/dsh-workflow": "0.1.5-rc.2",
     "@deepseek-ai/dsh-workflow-worker-thread": "0.1.5-rc.2",
-
     "@deepseek-ai/schemastery": "3.18.2",
     "@vanducng/dsh-tui": "workspace:^",
     "node-addon-require-builtin": "0.1.4"
